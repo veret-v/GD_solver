@@ -1,0 +1,88 @@
+#ifndef CALC_AREA
+#define CALC_AREA
+
+#include <vector>
+#include <iostream>
+#include <fstream>
+
+#include "point.h"
+
+
+enum class BoundaryType {
+   None,
+   Wall, 
+   OpenFlow, 
+   FixedValue,
+};
+
+
+struct Cell
+{
+public:
+   BoundaryType type;
+
+   double rho;
+   double p;  
+   Point u;
+
+   Point center;
+   std::vector<Point> vertices; 
+
+   Cell(
+      const BoundaryType _type, const double _rho, const double _p, 
+      const Point _u, const Point _c, const std::vector<Point> _v) : 
+      type(_type), rho(_rho), p(_p), u(_u), center(_c), vertices(_v) {};
+   Cell();
+
+   // double p_boundary;
+   // Point u_boundary;
+   // double rho_boundary;
+
+   // void boundary(BoundaryType boundary, double p_old, Point u_old, double rho_old);
+};
+
+
+class Grid
+{
+private:
+   std::vector<Cell> grid;
+
+   int fict_cells_x;
+   int fict_cells_y;
+
+   int cells_num_x;
+   int cells_num_y;
+
+   double left_boundary_x;
+   double right_boundary_x;
+   double left_boundary_y;
+   double right_boundary_y;
+
+
+public:
+   Grid(
+      int _fict_cells_x,
+      int _fict_cells_y,
+      int _cells_num_x,
+      int _cells_num_y,
+      double _left_boundary_x,
+      double _right_boundary_x,
+      double _left_boundary_y,
+      double _right_boundary_y,
+      const std::string &_left,
+      const std::string &_right,
+      const std::string &_up,
+      const std::string &_down
+   );
+   Cell* get_cell(size_t i, size_t j);
+   void set_values(
+      double rho_L, double rho_R, 
+      double p_L, double p_R, 
+      const Point u_L, const Point u_R
+   );
+   void WriteCSV(const std::string& filename);
+   BoundaryType get_boundary_type(const std::string& type);
+};
+
+
+#endif 
