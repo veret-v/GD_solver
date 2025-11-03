@@ -119,3 +119,8 @@ void Grid::WriteCSV(const std::string& filename)
     }
     fout.close();
 }
+
+grid_info Grid::get_info()
+{
+    return std::make_tuple(fict_cells_x, fict_cells_y, cells_num_x, cells_num_y, left_boundary_x, right_boundary_x, left_boundary_y, right_boundary_y); 
+}
