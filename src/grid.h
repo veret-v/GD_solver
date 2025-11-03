@@ -4,8 +4,13 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
+#include <tuple>
 
 #include "point.h"
+#include "solver.h"
+
+
+typedef std::tuple<int, int, int, int, double, double, double, double> grid_info;
 
 
 enum class BoundaryType {
@@ -44,6 +49,8 @@ public:
 
 class Grid
 {
+friend class RimanSolver1D;
+
 private:
    std::vector<Cell> grid;
 
@@ -74,14 +81,17 @@ public:
       const std::string &_up,
       const std::string &_down
    );
+
    Cell* get_cell(size_t i, size_t j);
+   grid_info get_info();
+   BoundaryType get_boundary_type(const std::string& type);
+
    void set_values(
       double rho_L, double rho_R, 
       double p_L, double p_R, 
       const Point u_L, const Point u_R
    );
    void WriteCSV(const std::string& filename);
-   BoundaryType get_boundary_type(const std::string& type);
 };
 
 

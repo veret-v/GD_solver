@@ -1,14 +1,18 @@
 #ifndef SOLVER
 #define SOLVER
 
-class Solver
+
+#include "./grid.h"
+
+class RimanSolver1D
 {
 private:
-        
+    Grid grid;
+
+    bool check_grid(const Grid &grid) ;
 
 public:
-    Solver(/* args */);
-    ~Solver();
+    RimanSolver1D(Grid* grid);
 };
 
 
