@@ -44,6 +44,9 @@ double calc_time_step(const std::vector<std::vector<double>>& v_cons, double dx,
 namespace {
 constexpr double RHO_FLOOR = 1e-8;
 constexpr double P_FLOOR = 1e-8;
+constexpr double EPS = 1e-6;
+constexpr int MAX_ITER_NUM = 20;
+constexpr double P_MAX_RATIO = 2.0;
 }
 
 std::vector<double> cons_to_noncons(const std::vector<double>& v_cons, double g) {
@@ -69,7 +72,7 @@ std::vector<double> cons_to_noncons(const std::vector<double>& v_cons, double g)
     
     
     // �������� �� ������������� ��������
-    if (p < P_FLOOR) {
+    if (p < 0.0) {
         std::cout << "WARNING: Negative pressure detected: " << p << std::endl;
         p = P_FLOOR; // ����� ������������� �������� ������ ��������������
     }
@@ -268,108 +271,105 @@ void set_sod_initial_conditions(std::vector<std::vector<double>>& u_prev,
 
 std::vector<double> find_solution(const std::vector<double>& v_noncons_l, const std::vector<double>& v_noncons_r,
                                   double v_cont, double p_cont, double c_l, double c_r, double S, double g){
-    double p_l = v_noncons_l[P];
-    double rho_l = v_noncons_l[RHO];
-    double u_l = v_noncons_l[U];
+    const double rl = v_noncons_l[RHO];
+    const double vl = v_noncons_l[U];
+    const double pl = v_noncons_l[P];
 
+    const double rr = v_noncons_r[RHO];
+    const double vr = v_noncons_r[U];
+    const double pr = v_noncons_r[P];
 
-    double p_r = v_noncons_r[P];
-    double rho_r = v_noncons_r[RHO];
-    double u_r = v_noncons_r[U];
+    const double g1 = 0.5 * (g - 1.0) / g;
+    const double g2 = 0.5 * (g + 1.0) / g;
+    const double g3 = 2.0 * g / (g - 1.0);
+    const double g4 = 2.0 / (g - 1.0);
+    const double g5 = 2.0 / (g + 1.0);
+    const double g6 = (g - 1.0) / (g + 1.0);
+    const double g7 = 0.5 * (g - 1.0);
 
-    double S_l = u_l - c_l * std::sqrt( ((g - 1) / (2 * g) + (g + 1) / (2 * g) * (p_cont / p_l)) );
-    double S_hl = u_l - c_l;
-    double S_tl = v_cont - c_l;
-    double S_r = u_r + c_r * std::sqrt( ((g - 1) / (2 * g) + (g + 1) / (2 * g) * (p_cont / p_r)) );
-    double S_hr = u_r + c_r;
-    double S_tr = v_cont + c_r;
-    double rho, u, p;
-    
-    double g_ratio = (g - 1) / (g + 1);
-    double g_ratio_1 = 2 / (g - 1);
-    double g_ratio_2 = 2 / (g + 1);
-    double g_ratio_3 = (2 * g) / (g - 1);
-    double g_ratio_4 = (g - 1) / 2;
-    double p_ratio_l = p_cont / p_l;
-    double p_ratio_r = p_cont / p_r;
-    
-    if(S <= v_cont){
-        if (p_cont > p_l){
-            if(S > S_l){
-                rho = rho_l;
-                u = u_l;
-                p = p_l;
+    double rho_star = 0.0;
+    double vel_star = 0.0;
+    double press_star = 0.0;
+
+    if (S <= v_cont) {
+        if (p_cont <= pl) {
+            const double shl = vl - c_l;
+            if (S <= shl) {
+                rho_star = rl;
+                vel_star = vl;
+                press_star = pl;
+            } else {
+                const double p_ratio = p_cont / pl;
+                const double cml = c_l * std::pow(p_ratio, g1);
+                const double stl = v_cont - cml;
+                if (S > stl) {
+                    rho_star = rl * std::pow(p_ratio, 1.0 / g);
+                    vel_star = v_cont;
+                    press_star = p_cont;
+                } else {
+                    const double vel = g5 * (c_l + g7 * vl + S);
+                    const double c = g5 * (c_l + g7 * (vl - S));
+                    rho_star = rl * std::pow(c / c_l, g4);
+                    press_star = pl * std::pow(c / c_l, g3);
+                    vel_star = vel;
+                }
             }
-            else{
-                u = v_cont;
-                p = p_cont;
-                rho = rho_l * ((p_ratio_l + g_ratio) / (1 + p_ratio_l * g_ratio));
+        } else {
+            const double p_ratio = p_cont / pl;
+            const double sl = vl - c_l * std::sqrt(g2 * p_ratio + g1);
+            if (S <= sl) {
+                rho_star = rl;
+                vel_star = vl;
+                press_star = pl;
+            } else {
+                rho_star = rl * (p_ratio + g6) / (p_ratio * g6 + 1.0);
+                vel_star = v_cont;
+                press_star = p_cont;
             }
         }
-        else{
-            if(S < S_hl){
-                rho = rho_l;
-                u = u_l;
-                p = p_l;
+    } else {
+        if (p_cont > pr) {
+            const double p_ratio = p_cont / pr;
+            const double sr = vr + c_r * std::sqrt(g2 * p_ratio + g1);
+            if (S >= sr) {
+                rho_star = rr;
+                vel_star = vr;
+                press_star = pr;
+            } else {
+                rho_star = rr * (p_ratio + g6) / (p_ratio * g6 + 1.0);
+                vel_star = v_cont;
+                press_star = p_cont;
             }
-            else{
-                if(S > S_tl){
-                    rho = rho_l * std::pow(p_ratio_l, 1.0 / g);
-                    u = v_cont;
-                    p = p_cont;
-                }
-                else{
-                    rho = rho_l * pow((g_ratio_2 + g_ratio / c_l * (u_l - S)), g_ratio_1);
-                    p = p_l * pow((g_ratio_2 + g_ratio / c_l * (u_l - S)), g_ratio_3);
-                    u = g_ratio_2 * (c_l + S + u_l * g_ratio_4);
+        } else {
+            const double shr = vr + c_r;
+            if (S >= shr) {
+                rho_star = rr;
+                vel_star = vr;
+                press_star = pr;
+            } else {
+                const double p_ratio = p_cont / pr;
+                const double cmr = c_r * std::pow(p_ratio, g1);
+                const double str = v_cont + cmr;
+                if (S <= str) {
+                    rho_star = rr * std::pow(p_ratio, 1.0 / g);
+                    vel_star = v_cont;
+                    press_star = p_cont;
+                } else {
+                    const double vel = g5 * (-c_r + g7 * vr + S);
+                    const double c = g5 * (c_r - g7 * (vr - S));
+                    rho_star = rr * std::pow(c / c_r, g4);
+                    press_star = pr * std::pow(c / c_r, g3);
+                    vel_star = vel;
                 }
             }
-
         }
-
-
-    }
-    else {
-        if(p_cont > p_r){
-            if (S_r > S){
-                rho = rho_r;
-                u = u_r;
-                p = p_r;
-                }
-            else{
-                u = v_cont;
-                p = p_cont;
-                rho = rho_r * ((g_ratio + p_ratio_r) / (1 + g_ratio * p_ratio_r));
-            }
-        }
-        else{
-            if (S_hr > S){
-                rho = rho_r;
-                p = p_r;
-                u = u_r;
-            }
-            else{
-                if(S > S_tr){
-                    rho = rho_r * std::pow(p_ratio_r, 1.0 / g);
-                    u = v_cont;
-                    p = p_cont;
-                }
-                else{
-                    rho = rho_r * pow((g_ratio_2 - g_ratio / c_r * (u_r - S)), g_ratio_1);
-                    p = p_r * pow((g_ratio_2 - g_ratio / c_r * (u_r - S)), g_ratio_3);
-                    u = g_ratio_2 * (-c_r + S + u_r * g_ratio_4);
-                }
-            }
-        } 
-
     }
 
     std::vector<double> v_noncons(M);
-    v_noncons[RHO] = rho;
-    v_noncons[P] = p;
-    v_noncons[U] = u;
+    v_noncons[RHO] = rho_star;
+    v_noncons[U] = vel_star;
+    v_noncons[P] = press_star;
     return v_noncons;
-
 }
 
 double pressure_initial_guess(const std::vector<double>& v_ncons_l, const std::vector<double>& v_ncons_r, double cl, double cr, double g) {
@@ -400,31 +400,21 @@ double pressure_initial_guess(const std::vector<double>& v_ncons_l, const std::v
     p_max = std::max( pl, pr );
     p_ratio = p_max / p_min;
 
-    double p_guess = p_lin;
-    if ( ( p_ratio > 2.0 ) ||
-       !(( p_min < p_lin && p_lin < p_max ) || ( fabs( p_min - p_lin ) < 1.e-6 || fabs( p_max - p_lin ) < 1.e-6 )) ) {
-        if ( p_lin < p_min ) {
-            /* ��������� ����������� �� ���� ������ ����������
-               Toro E.F. Riemann Solvers and Numerical Methods for Fluid Dynamics. - 2nd Edition. - Springer,
-               1999. - P. 302. - Formula (9.32) + �������� �� ���������� ��������� ��������� */
-            g1 = 0.5 * ( g - 1.0 ) / g;
-            p_guess = pow( ( ( cl + cr - 0.5 * ( g - 1.0 ) * ( vr - vl ) ) / ( cl / pow( pl, g1 ) + cr / pow( pr, g1 ) ) ), 1.0 / g1 );
-        } else {
-            /* ��������� ����������� �� ���� ������� ������
-               Toro E.F. Riemann Solvers and Numerical Methods for Fluid Dynamics. - 2nd Edition. - Springer,
-               1999. - P. 128. - Formula (4.48) + �������� �� ���������� ��������� ��������� */
-            g1 = 2.0 / ( g + 1.0 );
-            g2 = ( g - 1.0 ) / ( g + 1.0 );
-            p1 = sqrt( g1 / rl / ( g2 * pl + p_lin ) );
-            p2 = sqrt( g1 / rr / ( g2 * pr + p_lin ) );
-            p_guess = ( p1 * pl + p2 * pr - ( vr - vl ) ) / ( p1 + p2 );
-        }
+    if ( ( p_ratio <= P_MAX_RATIO ) &&
+       ( ( p_min < p_lin && p_lin < p_max ) || ( std::fabs( p_min - p_lin ) < EPS || std::fabs( p_max - p_lin ) < EPS ) ) ) {
+        return p_lin;
     }
 
-    if (p_guess <= 0.0 || !std::isfinite(p_guess)) {
-        p_guess = std::max(1e-10, std::fabs(p_lin));
+    if ( p_lin < p_min ) {
+        g1 = 0.5 * ( g - 1.0 ) / g;
+        return std::pow( ( ( cl + cr - 0.5 * ( g - 1.0 ) * ( vr - vl ) ) / ( cl / std::pow( pl, g1 ) + cr / std::pow( pr, g1 ) ) ), 1.0 / g1 );
     }
-    return p_guess;
+
+    g1 = 2.0 / ( g + 1.0 );
+    g2 = ( g - 1.0 ) / ( g + 1.0 );
+    p1 = std::sqrt( g1 / rl / ( g2 * pl + p_lin ) );
+    p2 = std::sqrt( g1 / rr / ( g2 * pr + p_lin ) );
+    return ( p1 * pl + p2 * pr - ( vr - vl ) ) / ( p1 + p2 );
     
 }
 
@@ -482,9 +472,9 @@ std::tuple<double, double> calc_contact_pressure_velocity(
 
     // ������������, ��� pressure_initial_guess ���� ���������� ��� ����������
     p_old = pressure_initial_guess(v_ncons_l, v_ncons_r, cl, cr, g);
-    if (p_old <= 0.0 || !std::isfinite(p_old)) {
-        printf("\ncalc_contact_pressure_velocity -> initial pressure guess is non-physical (%.6e). Resetting.\n", p_old);
-        p_old = 1e-10;
+    if (p_old < 0.0) {
+        printf("\ncalc_contact_pressure_velocity -> initial pressure guess is negative ");
+        exit(EXIT_FAILURE);
     }
     
     // ������� ����������� ��������� ������� �������-�������
@@ -502,16 +492,16 @@ std::tuple<double, double> calc_contact_pressure_velocity(
         criteria = 2.0 * std::fabs((p_cont - p_old) / (p_cont + p_old));
         iter_num++;
         
-        if (iter_num > 20) {
+        if (iter_num > MAX_ITER_NUM) {
             printf("\ncalc_contact_pressure_velocity -> number of iterations exceeds the maximum value.\n");
             exit(EXIT_FAILURE);
         }
-        if (p_cont <= 0.0 || !std::isfinite(p_cont)) {
-            printf("\ncalc_contact_pressure_velocity -> pressure became non-physical (%.6e). Resetting and continuing.\n", p_cont);
-            p_cont = 1e-10;
+        if (p_cont < 0.0) {
+            printf("\ncalc_contact_pressure_velocity -> pressure is negative.\n");
+            exit(EXIT_FAILURE);            
         }
         p_old = p_cont;
-    } while (criteria > 1.e-6);
+    } while (criteria > EPS);
 
     // �������� ����������� �������
     v_cont = 0.5 * (vl + vr + fr - fl);
