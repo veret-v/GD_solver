@@ -7,11 +7,9 @@
 #include <tuple>
 
 #include "point.h"
-#include "solver.h"
-
 
 typedef std::tuple<int, int, int, int, double, double, double, double> grid_info;
-
+class RimanSolver1D;
 
 enum class BoundaryType {
    None,
@@ -46,7 +44,6 @@ public:
    // void boundary(BoundaryType boundary, double p_old, Point u_old, double rho_old);
 };
 
-
 class Grid
 {
 friend class RimanSolver1D;
@@ -64,7 +61,6 @@ private:
    double right_boundary_x;
    double left_boundary_y;
    double right_boundary_y;
-
 
 public:
    Grid(

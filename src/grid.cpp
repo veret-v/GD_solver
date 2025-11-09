@@ -25,7 +25,6 @@ Grid::Grid(
     const std::string &_up,
     const std::string &_down)
 {
-
     fict_cells_x = _fict_cells_x;
     fict_cells_y = _fict_cells_y;
 
