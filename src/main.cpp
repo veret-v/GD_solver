@@ -43,6 +43,8 @@ int main(int argc, char** argv) {
     double rho_R = cases.getDouble(case_name, "rho_R");
     double u_R   = cases.getDouble(case_name, "u_R");
     double p_R   = cases.getDouble(case_name, "p_R");
+    double g     = cases.getDouble(case_name, "g");
+    double stop_time = cases.getDouble(case_name, "stop_time");
 
     std::cout << "System ini: x_min=" << x_min << " x_max=" << x_max << " y_min=" << y_min << " y_max=" << y_max << " Nx=" << Nx <<  "Ny=" << Ny << " tmax=" << tmax
               << "\nCFL=" << cfl << " boundary=" << boundary_type_left << " equation=" << equation << std::endl;
@@ -54,5 +56,9 @@ int main(int argc, char** argv) {
     std::string output_dir = "../output/data.csv";
     Grid task(fict_x, fict_y, Nx, Ny, x_min, x_max, y_min, y_max, boundary_type_left, boundary_type_right, boundary_type_down, boundary_type_up);
     task.set_values(rho_L, rho_R, p_L, p_R, Point(u_L, 0), Point(u_R, 0));
-    task.WriteCSV(output_dir);
+    RimanSolver1D solver(&task, rho_L, rho_R, p_L, p_R, u_L, u_R, g, stop_time);
+
+    solver.calc_sound_velocity();
+    solver.calc_contact_pressure_velocity();
+    solver.solve(output_dir);
 }
