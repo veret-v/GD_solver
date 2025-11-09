@@ -39,9 +39,11 @@ Grid::Grid(
 
     double hx = (right_boundary_x - left_boundary_x) / cells_num_x;
     int cells_num_fict_x = cells_num_x + 2 * fict_cells_x;
+    total_cells_x = cells_num_fict_x;
     
     double hy = (right_boundary_y - left_boundary_y) / cells_num_y;
     int cells_num_fict_y = cells_num_y + 2 * fict_cells_y;
+    total_cells_y = cells_num_fict_y;
 
     grid = std::vector<Cell>(cells_num_fict_x * cells_num_fict_y, Cell()); 
     
@@ -62,9 +64,9 @@ Grid::Grid(
                 cell -> type = this -> get_boundary_type(_left);
             } else if (j < fict_cells_y) {
                 cell -> type = this -> get_boundary_type(_down);
-            } else if (i > (cells_num_fict_x - fict_cells_x)) {
+            } else if (i >= (cells_num_fict_x - fict_cells_x)) {
                 cell -> type = this -> get_boundary_type(_right);
-            } else if (j > (cells_num_fict_y - fict_cells_y)) {
+            } else if (j >= (cells_num_fict_y - fict_cells_y)) {
                 cell -> type = this -> get_boundary_type(_up);
             } 
         }
@@ -73,7 +75,7 @@ Grid::Grid(
 
 Cell* Grid::get_cell(size_t i, size_t j)
 {
-    return &grid[i * cells_num_y + j];
+    return &grid[i * total_cells_y + j];
 }
 
 void Grid::set_values(
@@ -103,7 +105,8 @@ BoundaryType Grid::get_boundary_type(const std::string& type)
 {
     if (type == "Wall") return BoundaryType::Wall;
     else if (type == "OpenFlow") return BoundaryType::OpenFlow;
-    else if (type == "FixedValue") return BoundaryType::FixedValue;  
+    else if (type == "FixedValue") return BoundaryType::FixedValue;
+    return BoundaryType::None;
 }
 
 void Grid::WriteCSV(const std::string& filename)

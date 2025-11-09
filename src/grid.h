@@ -8,6 +8,15 @@
 
 #include "point.h"
 #include "solver.h"
+#define RHO 0
+#define U 1
+#define P 2
+// ��� ������� ��� �������������� ����������
+#define r 0 // density
+#define ru 1 // denity * speed
+#define e 2 // energy
+
+#define M 3
 
 
 typedef std::tuple<int, int, int, int, double, double, double, double> grid_info;
@@ -59,6 +68,9 @@ private:
 
    int cells_num_x;
    int cells_num_y;
+
+   int total_cells_x;
+   int total_cells_y;
 
    double left_boundary_x;
    double right_boundary_x;

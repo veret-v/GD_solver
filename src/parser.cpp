@@ -65,9 +65,15 @@ std::string SectionedIniParser::getString(const std::string& section, const std:
     
     // Поиск секции
     auto sec_it = config.find(section_trimmed);
+    if (sec_it == config.end()) {
+        throw std::runtime_error("Section '" + section_trimmed + "' not found in ini file.");
+    }
     
     // Поиск ключа в секции
     auto key_it = sec_it->second.find(key_trimmed);
+    if (key_it == sec_it->second.end()) {
+        throw std::runtime_error("Key '" + key_trimmed + "' not found in section '" + section_trimmed + "'.");
+    }
     // if (key_it == sec_it->second.end()) {
     //     // Отладочный вывод доступных ключей
     //     std::string available_keys;
