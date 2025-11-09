@@ -67,6 +67,21 @@ int main(int argc, char** argv) {
 
     
 
+    auto parse_boundary_code = [](const std::string& value) -> int {
+        try {
+            int code = std::stoi(value);
+            if (code <= 0) {
+                return 2; // default to outflow
+            }
+            return code;
+        } catch (...) {
+            return 2; // default to outflow
+        }
+    };
+
+    const int left_bc_code = parse_boundary_code(boundary_type_left);
+    const int right_bc_code = parse_boundary_code(boundary_type_right);
+
     // �������� ���� �� �������
     double curr_time = 0;
     int step = 0;
@@ -74,10 +89,8 @@ int main(int argc, char** argv) {
     while(curr_time < tmax) {
         // ��������� �������� ������
         for(int i = 0; i < fict_x; ++i) {
-            u_prev[i] = boundary(u_prev[fict_x], 1, g);
-            enforce_physical_state(u_prev[i], g);
-            u_prev[Nx_with_fict_cells - 1 - i] = boundary(u_prev[Nx_with_fict_cells - fict_x - 1], 2, g);
-            enforce_physical_state(u_prev[Nx_with_fict_cells - 1 - i], g);
+            u_prev[i] = boundary(u_prev[fict_x], left_bc_code, g);
+            u_prev[Nx_with_fict_cells - 1 - i] = boundary(u_prev[Nx_with_fict_cells - fict_x - 1], right_bc_code, g);
         }
 
         double dt = calc_time_step(u_prev, dx, cfl, g, fict_x);
@@ -87,32 +100,18 @@ int main(int argc, char** argv) {
 
         // ���������� ������� � ���������� �������
         for(int i = fict_x; i < Nx_with_fict_cells - fict_x; ++i) {
-            if(i == fict_x) {
-                bound = boundary(u_prev[i], 1, g);
-                left_flux = godunov_flux(bound, u_prev[i], g);
-            } else {
-                left_flux = godunov_flux(u_prev[i-1], u_prev[i], g);
-            }
-
-            if(i == Nx_with_fict_cells - fict_x - 1) {
-                bound = boundary(u_prev[i], 2, g);
-                right_flux = godunov_flux(u_prev[i], bound, g);
-            } else {
-                right_flux = godunov_flux(u_prev[i], u_prev[i+1], g);
-            }
+            left_flux = godunov_flux(u_prev[i-1], u_prev[i], g);
+            right_flux = godunov_flux(u_prev[i], u_prev[i+1], g);
 
             for(int j = 0; j < M; ++j) {
                 u_next[i][j] = u_prev[i][j] - (dt / dx) * (right_flux[j] - left_flux[j]);
             }
-            enforce_physical_state(u_next[i], g);
         }
 
         // ����������� ������ ������ ��������� �� ���������� ���������
         for(int i = 0; i < fict_x; ++i) {
-            u_next[i] = boundary(u_next[fict_x], 1, g);
-            enforce_physical_state(u_next[i], g);
-            u_next[Nx_with_fict_cells - 1 - i] = boundary(u_next[Nx_with_fict_cells - fict_x - 1], 2, g);
-            enforce_physical_state(u_next[Nx_with_fict_cells - 1 - i], g);
+            u_next[i] = boundary(u_next[fict_x], left_bc_code, g);
+            u_next[Nx_with_fict_cells - 1 - i] = boundary(u_next[Nx_with_fict_cells - fict_x - 1], right_bc_code, g);
         }
 
         std::swap(u_prev, u_next);
