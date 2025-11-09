@@ -265,6 +265,8 @@ void set_sod_initial_conditions(std::vector<std::vector<double>>& u_prev,
         
         // �������������� u_next ������ �� ����������
         u_next[i] = u_prev[i];
+        enforce_physical_state(u_prev[i], g);
+        enforce_physical_state(u_next[i], g);
         
     }
 }

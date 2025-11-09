@@ -70,10 +70,7 @@ int main(int argc, char** argv) {
     auto parse_boundary_code = [](const std::string& value) -> int {
         try {
             int code = std::stoi(value);
-            if (code <= 0) {
-                return 2; // default to outflow
-            }
-            return code;
+            return (code <= 0) ? 2 : code;
         } catch (...) {
             return 2; // default to outflow
         }
@@ -106,6 +103,7 @@ int main(int argc, char** argv) {
             for(int j = 0; j < M; ++j) {
                 u_next[i][j] = u_prev[i][j] - (dt / dx) * (right_flux[j] - left_flux[j]);
             }
+            enforce_physical_state(u_next[i], g);
         }
 
         // ����������� ������ ������ ��������� �� ���������� ���������
