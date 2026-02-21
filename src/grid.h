@@ -8,15 +8,17 @@
 
 #include "point.h"
 #include "solver.h"
-#define RHO 0
-#define U 1
-#define P 2
-// ��� ������� ��� �������������� ����������
+#define RHO 0 // density
+#define U 1 // speed x
+#define V 2 // speed y
+#define P 3 // pressure
+// пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 #define r 0 // density
-#define ru 1 // denity * speed
-#define e 2 // energy
+#define ru 1 // denity * speed x
+#define rv 2 // denity * speed y
+#define e 3 // energy
 
-#define M 3
+#define M 4
 
 
 typedef std::tuple<int, int, int, int, double, double, double, double> grid_info;

@@ -8,4 +8,6 @@ target_sources(${PROJECT_NAME} PRIVATE
     grid.cpp 
     solver.h 
     solver.cpp 
+    script.h
+    script.cpp
 )

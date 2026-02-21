@@ -11,12 +11,18 @@ add_executable(${PROJECT_NAME}
     src/point.cpp
     src/grid.cpp
     src/solver.cpp
+    src/script.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE 
     "${PROJECT_SOURCE_DIR}"
     "${PROJECT_SOURCE_DIR}/src"
 )
+if(MSVC)
+    add_compile_options(/O2 /fp:fast /arch:AVX2)
+else()
+    add_compile_options(-O3 -ffast-math -march=native)
+endif()
 
 # Уберите эту строку - она не нужна, если все файлы уже добавлены выше
 # add_subdirectory("src")
