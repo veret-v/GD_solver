@@ -2,3 +2,14 @@ build/
 *.o
 smth.txt.vscode
 .vscode
+.idea/
+.DS_Store
+
+__pycache__/
+*.pyc
+
+*.gif
+output/
+scripts/
+run.sh
+*.utf8
