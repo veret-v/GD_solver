@@ -2,24 +2,52 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import glob
-import imageio
+import imageio.v2 as imageio
 import os
 import re
 
-def create_animation_2D(filenames, output_gif='animation_2d.gif', gamma=1.4):
+def load_method_tag(project_root):
+    equation_type = -1
+    cfg_path = os.path.join(project_root, "configs", "input.ini")
+    if os.path.exists(cfg_path):
+        in_system = False
+        with open(cfg_path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw in f:
+                line = raw.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    in_system = (line[1:-1].strip().lower() == "system")
+                    continue
+                if not in_system or "=" not in line:
+                    continue
+                key, value = [s.strip() for s in line.split("=", 1)]
+                if key.lower() == "equation_type":
+                    try:
+                        equation_type = int(value)
+                    except ValueError:
+                        pass
+    method_names = {
+        0: "Godunov", 1: "Kolgan", 2: "Rodionov", 3: "HLL",
+        4: "HLLC", 5: "Rusanov", 6: "Osher", 7: "Roe", 8: "FLIC",
+    }
+    return f"eq={equation_type} ({method_names.get(equation_type, 'Unknown')})"
+
+
+def create_animation_2D(filenames, method_tag, output_gif='profile_2d.gif', gamma=1.4):
     """
-    Создаёт GIF-анимацию из серии 2D CSV-файлов с результатами расчёта.
+    РЎРѕР·РґР°С‘С‚ GIF-Р°РЅРёРјР°С†РёСЋ РёР· СЃРµСЂРёРё 2D CSV-С„Р°Р№Р»РѕРІ СЃ СЂРµР·СѓР»СЊС‚Р°С‚Р°РјРё СЂР°СЃС‡С‘С‚Р°.
     
-    Параметры
+    РџР°СЂР°РјРµС‚СЂС‹
     ----------
     filenames : list
-        Список путей к CSV-файлам (каждый файл – один временной слой).
+        РЎРїРёСЃРѕРє РїСѓС‚РµР№ Рє CSV-С„Р°Р№Р»Р°Рј (РєР°Р¶РґС‹Р№ С„Р°Р№Р» вЂ“ РѕРґРёРЅ РІСЂРµРјРµРЅРЅРѕР№ СЃР»РѕР№).
     output_gif : str
-        Имя выходного GIF-файла.
+        РРјСЏ РІС‹С…РѕРґРЅРѕРіРѕ GIF-С„Р°Р№Р»Р°.
     gamma : float
-        Показатель адиабаты для вычисления внутренней энергии.
+        РџРѕРєР°Р·Р°С‚РµР»СЊ Р°РґРёР°Р±Р°С‚С‹ РґР»СЏ РІС‹С‡РёСЃР»РµРЅРёСЏ РІРЅСѓС‚СЂРµРЅРЅРµР№ СЌРЅРµСЂРіРёРё.
     """
-    # Извлекаем время из имён файлов и сортируем
+    # РР·РІР»РµРєР°РµРј РІСЂРµРјСЏ РёР· РёРјС‘РЅ С„Р°Р№Р»РѕРІ Рё СЃРѕСЂС‚РёСЂСѓРµРј
     data_by_time = {}
     for filename in filenames:
         match = re.search(r'time_([\d.]+)\.csv', filename)
@@ -28,29 +56,29 @@ def create_animation_2D(filenames, output_gif='animation_2d.gif', gamma=1.4):
             df = pd.read_csv(filename)
             data_by_time[time] = df
         else:
-            print(f"Предупреждение: не удалось извлечь время из имени {filename}, пропускаем.")
+            print(f"РџСЂРµРґСѓРїСЂРµР¶РґРµРЅРёРµ: РЅРµ СѓРґР°Р»РѕСЃСЊ РёР·РІР»РµС‡СЊ РІСЂРµРјСЏ РёР· РёРјРµРЅРё {filename}, РїСЂРѕРїСѓСЃРєР°РµРј.")
 
     if not data_by_time:
-        print("Не найдено ни одного файла с корректной временной меткой.")
+        print("РќРµ РЅР°Р№РґРµРЅРѕ РЅРё РѕРґРЅРѕРіРѕ С„Р°Р№Р»Р° СЃ РєРѕСЂСЂРµРєС‚РЅРѕР№ РІСЂРµРјРµРЅРЅРѕР№ РјРµС‚РєРѕР№.")
         return
 
     times = sorted(data_by_time.keys())
-    print(f"Найдено временных слоёв: {len(times)}")
+    print(f"РќР°Р№РґРµРЅРѕ РІСЂРµРјРµРЅРЅС‹С… СЃР»РѕС‘РІ: {len(times)}")
 
-    # Определим уникальные координаты сетки по первому файлу (предполагаем, что сетка постоянна)
+    # РћРїСЂРµРґРµР»РёРј СѓРЅРёРєР°Р»СЊРЅС‹Рµ РєРѕРѕСЂРґРёРЅР°С‚С‹ СЃРµС‚РєРё РїРѕ РїРµСЂРІРѕРјСѓ С„Р°Р№Р»Сѓ (РїСЂРµРґРїРѕР»Р°РіР°РµРј, С‡С‚Рѕ СЃРµС‚РєР° РїРѕСЃС‚РѕСЏРЅРЅР°)
     sample_df = data_by_time[times[0]]
     x_vals = np.sort(sample_df['x'].unique())
     y_vals = np.sort(sample_df['y'].unique())
     nx, ny = len(x_vals), len(y_vals)
-    print(f"Сетка: {nx} x {ny} (x от {x_vals.min():.3f} до {x_vals.max():.3f}, "
-          f"y от {y_vals.min():.3f} до {y_vals.max():.3f})")
+    print(f"РЎРµС‚РєР°: {nx} x {ny} (x РѕС‚ {x_vals.min():.3f} РґРѕ {x_vals.max():.3f}, "
+          f"y РѕС‚ {y_vals.min():.3f} РґРѕ {y_vals.max():.3f})")
 
-    # Подготовка к сохранению кадров
+    # РџРѕРґРіРѕС‚РѕРІРєР° Рє СЃРѕС…СЂР°РЅРµРЅРёСЋ РєР°РґСЂРѕРІ
     frame_filenames = []
     for i, t in enumerate(times):
         df = data_by_time[t]
 
-        # Преобразуем табличные данные в 2D-массивы для каждой величины
+        # РџСЂРµРѕР±СЂР°Р·СѓРµРј С‚Р°Р±Р»РёС‡РЅС‹Рµ РґР°РЅРЅС‹Рµ РІ 2D-РјР°СЃСЃРёРІС‹ РґР»СЏ РєР°Р¶РґРѕР№ РІРµР»РёС‡РёРЅС‹
         try:
             rho_num = df.pivot(index='y', columns='x', values='rho').values
             rho_ex = df.pivot(index='y', columns='x', values='rho_exact').values
@@ -61,33 +89,33 @@ def create_animation_2D(filenames, output_gif='animation_2d.gif', gamma=1.4):
             v_num = df.pivot(index='y', columns='x', values='v').values
             v_ex = df.pivot(index='y', columns='x', values='v_exact').values
         except KeyError as e:
-            print(f"Ошибка: в файле для времени {t} отсутствует столбец {e}")
+            print(f"РћС€РёР±РєР°: РІ С„Р°Р№Р»Рµ РґР»СЏ РІСЂРµРјРµРЅРё {t} РѕС‚СЃСѓС‚СЃС‚РІСѓРµС‚ СЃС‚РѕР»Р±РµС† {e}")
             continue
 
-        # Вычисляем внутреннюю энергию
+        # Р’С‹С‡РёСЃР»СЏРµРј РІРЅСѓС‚СЂРµРЅРЅСЋСЋ СЌРЅРµСЂРіРёСЋ
         e_num = p_num / ((gamma - 1) * rho_num)
         e_ex = p_ex / ((gamma - 1) * rho_ex)
 
-        # Создаём сетку для отрисовки (матрицы x и y)
+        # РЎРѕР·РґР°С‘Рј СЃРµС‚РєСѓ РґР»СЏ РѕС‚СЂРёСЃРѕРІРєРё (РјР°С‚СЂРёС†С‹ x Рё y)
         X, Y = np.meshgrid(x_vals, y_vals)
 
-        # Строим фигуру с 4 подграфиками (можно настроить под свои нужды)
+        # РЎС‚СЂРѕРёРј С„РёРіСѓСЂСѓ СЃ 4 РїРѕРґРіСЂР°С„РёРєР°РјРё (РјРѕР¶РЅРѕ РЅР°СЃС‚СЂРѕРёС‚СЊ РїРѕРґ СЃРІРѕРё РЅСѓР¶РґС‹)
         fig, axs = plt.subplots(2, 2, figsize=(14, 10))
-        fig.suptitle(f'2D поля в момент времени t = {t:.6f} с', fontsize=16)
+        fig.suptitle(f'2D РїРѕР»СЏ РІ РјРѕРјРµРЅС‚ РІСЂРµРјРµРЅРё t = {t:.6f} СЃ | {method_tag}', fontsize=16)
 
-        # Настройка пределов для цветовых шкал (можно брать глобальные min/max по всем временам)
-        # Для простоты используем локальные min/max каждого кадра
+        # РќР°СЃС‚СЂРѕР№РєР° РїСЂРµРґРµР»РѕРІ РґР»СЏ С†РІРµС‚РѕРІС‹С… С€РєР°Р» (РјРѕР¶РЅРѕ Р±СЂР°С‚СЊ РіР»РѕР±Р°Р»СЊРЅС‹Рµ min/max РїРѕ РІСЃРµРј РІСЂРµРјРµРЅР°Рј)
+        # Р”Р»СЏ РїСЂРѕСЃС‚РѕС‚С‹ РёСЃРїРѕР»СЊР·СѓРµРј Р»РѕРєР°Р»СЊРЅС‹Рµ min/max РєР°Р¶РґРѕРіРѕ РєР°РґСЂР°
         plots = [
-            (rho_num, rho_ex, r'Плотность $\rho$', axs[0, 0]),
-            (p_num,   p_ex,   r'Давление $p$',      axs[0, 1]),
-            (u_num,   u_ex,   r'Скорость $u$',      axs[1, 0]),
-            (v_num,   v_ex,   r'Скорость $v$',      axs[1, 1])
+            (rho_num, rho_ex, r'РџР»РѕС‚РЅРѕСЃС‚СЊ $\rho$', axs[0, 0]),
+            (p_num,   p_ex,   r'Р”Р°РІР»РµРЅРёРµ $p$',      axs[0, 1]),
+            (u_num,   u_ex,   r'РЎРєРѕСЂРѕСЃС‚СЊ $u$',      axs[1, 0]),
+            (v_num,   v_ex,   r'РЎРєРѕСЂРѕСЃС‚СЊ $v$',      axs[1, 1])
         ]
 
         for num, ex, title, ax in plots:
-            # Рисуем численное решение (заливка)
+            # Р РёСЃСѓРµРј С‡РёСЃР»РµРЅРЅРѕРµ СЂРµС€РµРЅРёРµ (Р·Р°Р»РёРІРєР°)
             im = ax.pcolormesh(X, Y, num, shading='auto', cmap='viridis')
-            # Можно добавить контуры точного решения (опционально)
+            # РњРѕР¶РЅРѕ РґРѕР±Р°РІРёС‚СЊ РєРѕРЅС‚СѓСЂС‹ С‚РѕС‡РЅРѕРіРѕ СЂРµС€РµРЅРёСЏ (РѕРїС†РёРѕРЅР°Р»СЊРЅРѕ)
             # ax.contour(X, Y, ex, colors='red', linewidths=0.5, linestyles='--')
             ax.set_title(title)
             ax.set_xlabel('x')
@@ -95,54 +123,56 @@ def create_animation_2D(filenames, output_gif='animation_2d.gif', gamma=1.4):
             ax.set_aspect('equal')
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
-        # Альтернативно: можно показывать ошибку или другие комбинации
-        # Здесь оставлено для простоты – численные поля.
+        # РђР»СЊС‚РµСЂРЅР°С‚РёРІРЅРѕ: РјРѕР¶РЅРѕ РїРѕРєР°Р·С‹РІР°С‚СЊ РѕС€РёР±РєСѓ РёР»Рё РґСЂСѓРіРёРµ РєРѕРјР±РёРЅР°С†РёРё
+        # Р—РґРµСЃСЊ РѕСЃС‚Р°РІР»РµРЅРѕ РґР»СЏ РїСЂРѕСЃС‚РѕС‚С‹ вЂ“ С‡РёСЃР»РµРЅРЅС‹Рµ РїРѕР»СЏ.
 
         plt.tight_layout()
 
-        # Сохраняем кадр
+        # РЎРѕС…СЂР°РЅСЏРµРј РєР°РґСЂ
         frame_name = f'frame_{i:03d}.png'
         plt.savefig(frame_name, dpi=100, bbox_inches='tight')
         plt.close()
         frame_filenames.append(frame_name)
-        print(f"Кадр {i+1}/{len(times)} сохранён (t = {t:.6f})")
+        print(f"РљР°РґСЂ {i+1}/{len(times)} СЃРѕС…СЂР°РЅС‘РЅ (t = {t:.6f})")
 
-    # Создаём GIF
+    # РЎРѕР·РґР°С‘Рј GIF
     if frame_filenames:
-        print("Создание GIF...")
+        print("РЎРѕР·РґР°РЅРёРµ GIF...")
         with imageio.get_writer(output_gif, mode='I', duration=0.2) as writer:
             for fname in frame_filenames:
                 image = imageio.imread(fname)
                 writer.append_data(image)
-        # Удаляем временные файлы
+        # РЈРґР°Р»СЏРµРј РІСЂРµРјРµРЅРЅС‹Рµ С„Р°Р№Р»С‹
         for fname in frame_filenames:
             os.remove(fname)
-        print(f"GIF успешно создан: {output_gif}")
+        print(f"GIF СѓСЃРїРµС€РЅРѕ СЃРѕР·РґР°РЅ: {output_gif}")
     else:
-        print("Не создано ни одного кадра.")
+        print("РќРµ СЃРѕР·РґР°РЅРѕ РЅРё РѕРґРЅРѕРіРѕ РєР°РґСЂР°.")
 
 
 if __name__ == "__main__":
-    # Путь к папке с файлами (измените на свой)
-    path = r'C:\solvver\GD_solver\output\steps'
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    method_tag = load_method_tag(project_root)
+    # РџСѓС‚СЊ Рє РїР°РїРєРµ СЃ С„Р°Р№Р»Р°РјРё (РёР·РјРµРЅРёС‚Рµ РЅР° СЃРІРѕР№)
+    path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "output", "steps"))
 
     if not os.path.exists(path):
-        print(f"Ошибка: путь {path} не существует!")
+        print(f"РћС€РёР±РєР°: РїСѓС‚СЊ {path} РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚!")
         exit()
 
-    # Ищем все CSV-файлы
+    # РС‰РµРј РІСЃРµ CSV-С„Р°Р№Р»С‹
     filenames = glob.glob(os.path.join(path, "*.csv"))
     if not filenames:
-        # Пробуем текущую папку
+        # РџСЂРѕР±СѓРµРј С‚РµРєСѓС‰СѓСЋ РїР°РїРєСѓ
         filenames = glob.glob("step_*_time_*.csv")
         if not filenames:
-            print("CSV-файлы не найдены.")
+            print("CSV-С„Р°Р№Р»С‹ РЅРµ РЅР°Р№РґРµРЅС‹.")
             exit()
 
-    print(f"Найдено файлов: {len(filenames)}")
-    # Для проверки покажем структуру первого
+    print(f"РќР°Р№РґРµРЅРѕ С„Р°Р№Р»РѕРІ: {len(filenames)}")
+    # Р”Р»СЏ РїСЂРѕРІРµСЂРєРё РїРѕРєР°Р¶РµРј СЃС‚СЂСѓРєС‚СѓСЂСѓ РїРµСЂРІРѕРіРѕ
     sample_df = pd.read_csv(filenames[0])
-    print("Столбцы первого файла:", sample_df.columns.tolist())
-    print("Количество строк:", len(sample_df))
+    print("РЎС‚РѕР»Р±С†С‹ РїРµСЂРІРѕРіРѕ С„Р°Р№Р»Р°:", sample_df.columns.tolist())
+    print("РљРѕР»РёС‡РµСЃС‚РІРѕ СЃС‚СЂРѕРє:", len(sample_df))
 
-    create_animation_2D(filenames, output_gif='animation_2d.gif', gamma=1.4)
+    create_animation_2D(filenames, method_tag, output_gif='profile_2d.gif', gamma=1.4)

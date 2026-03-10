@@ -8,9 +8,13 @@
 
 #include "solver.h"
 
+#include <algorithm>
+#include <cmath>
+#include <iostream>
+#include <map>
+#include <string>
 #include <vector>
 
-#include <bits/stdc++.h>
 #include <limits>
 
 //RimanSolver1D::RimanSolver1D(Grid* grid) {
@@ -765,7 +769,7 @@ std::tuple<double, double> calc_contact_pressure_velocity_y(
         }
         if (p_cont < 0.0) {
             std::cout<<("\ncalc_contact_pressure_velocity_y -> pressure is negative.\n")<<std::endl;
-            std::cout<<("\n p_cont = %.f \n", p_cont)<<std::endl;
+            std::cout << "\n p_cont = " << p_cont << "\n" << std::endl;
             exit(EXIT_FAILURE);            
         }
         p_old = p_cont;
@@ -788,8 +792,11 @@ std::tuple<double, double> calc_contact_pressure_velocity_y(
 std::vector<std::vector<std::vector<double>>> compute_analytic_solution_2d(
     double x_min, double x_max, double y_min, double y_max,
     int Nx, int Ny, int fict_x, int fict_y, 
-    double t, const std::vector<double>& left_prim, 
-    const std::vector<double>& right_prim, double g) 
+    double t,
+    const std::vector<std::vector<std::vector<double>>>& initial_cons,
+    int analytic_axis,
+    int analytic_profile_index,
+    double g) 
 {
     // Расчет параметров сетки
     double dx = (x_max - x_min) / Nx;
@@ -805,43 +812,81 @@ std::vector<std::vector<std::vector<double>>> compute_analytic_solution_2d(
     // Константы для удобства (предполагаем стандартный порядок)
     
 
-    // Расчет скоростей звука
-    double cl = calc_sound_speed(left_prim, g);
-    double cr = calc_sound_speed(right_prim, g);
-    
-    // Решение задачи о распаде произвольного разрыва вдоль X
-    // (Используем ваши существующие функции для X-направления)
-    auto [v_cont, p_cont] = calc_contact_pressure_velocity_x(left_prim, right_prim, cl, cr, g);
-    
-    double x_mid = (x_min + x_max) / 2.0;
+    auto clamp_index = [](int idx, int lo, int hi) {
+        if (idx < lo) return lo;
+        if (idx > hi) return hi;
+        return idx;
+    };
 
-    // 1. Сначала рассчитываем 1D профиль вдоль оси X
-    std::vector<std::vector<double>> profile_1d(Nx_total, std::vector<double>(M));
+    // Ищем интерфейс разрыва на выбранном профиле по максимальному скачку в примитивах.
+    auto jump_score = [g](const std::vector<double>& a_cons, const std::vector<double>& b_cons) {
+        std::vector<double> a = cons_to_noncons(a_cons, g);
+        std::vector<double> b = cons_to_noncons(b_cons, g);
+        return std::abs(a[RHO] - b[RHO]) + std::abs(a[U] - b[U]) + std::abs(a[V] - b[V]) + std::abs(a[P] - b[P]);
+    };
 
-    for (int i = fict_x; i < Nx_total - fict_x; i++) {
-        // Координата x с учетом фиктивных ячеек
-        double x = x_min + (i - fict_x + 0.5) * dx;
-        
-        // Самоподобная переменная xi = (x - x0) / t
-        double xi = (t > 1e-12) ? (x - x_mid) / t : (x < x_mid ? -1e10 : 1e10);
+    const bool solve_along_x = (analytic_axis == 0);
+    if (solve_along_x) {
+        const int j_profile_phys = (analytic_profile_index >= 0) ? analytic_profile_index : Ny / 4;
+        const int j = fict_y + clamp_index(j_profile_phys, 0, Ny - 1);
 
-        // Получаем решение из 1D решателя (он обычно возвращает rho, u, p)
-        // ВАЖНО: Ваша функция find_solution_x должна возвращать 3 значения.
-        std::vector<double> res_1d = find_solution_x(left_prim, right_prim, v_cont, p_cont, cl, cr, xi, g);
-        
-        profile_1d[i][RHO] = res_1d[0]; // rho
-        profile_1d[i][U]   = res_1d[1]; // u
-        profile_1d[i][P]   = res_1d[3]; // p
-        
-        // Для вертикальной скорости v: 
-        // В классической задаче Сода вдоль X, v остается равным начальному значению
-        profile_1d[i][V] = (x < x_mid) ? left_prim[V] : right_prim[V];
-    }
+        int i_left = fict_x + (Nx / 2) - 1;
+        i_left = clamp_index(i_left, fict_x, Nx_total - fict_x - 2);
+        double best = -std::numeric_limits<double>::infinity();
+        for (int i = fict_x; i < Nx_total - fict_x - 1; ++i) {
+            double s = jump_score(initial_cons[i][j], initial_cons[i + 1][j]);
+            if (s > best) {
+                best = s;
+                i_left = i;
+            }
+        }
+        const int i_right = i_left + 1;
 
-    // 2. Заполняем всю 2D плоскость, копируя 1D профиль вдоль оси Y
-    for (int i = 0; i < Nx_total; i++) {
-        for (int j = 0; j < Ny_total; j++) {
-            analytic_solution[i][j] = profile_1d[i];
+        std::vector<double> left_prim = cons_to_noncons(initial_cons[i_left][j], g);
+        std::vector<double> right_prim = cons_to_noncons(initial_cons[i_right][j], g);
+        double cl = calc_sound_speed(left_prim, g);
+        double cr = calc_sound_speed(right_prim, g);
+        auto [v_cont, p_cont] = calc_contact_pressure_velocity_x(left_prim, right_prim, cl, cr, g);
+
+        const double x_discont = x_min + (i_left - fict_x + 1) * dx;
+        for (int i = fict_x; i < Nx_total - fict_x; ++i) {
+            double x = x_min + (i - fict_x + 0.5) * dx;
+            double xi = (t > 1e-12) ? (x - x_discont) / t : (x < x_discont ? -1e10 : 1e10);
+            std::vector<double> res_1d = find_solution_x(left_prim, right_prim, v_cont, p_cont, cl, cr, xi, g);
+            for (int jj = fict_y; jj < Ny_total - fict_y; ++jj) {
+                analytic_solution[i][jj] = res_1d;
+            }
+        }
+    } else {
+        const int i_profile_phys = (analytic_profile_index >= 0) ? analytic_profile_index : Nx / 4;
+        const int i = fict_x + clamp_index(i_profile_phys, 0, Nx - 1);
+
+        int j_down = fict_y + (Ny / 2) - 1;
+        j_down = clamp_index(j_down, fict_y, Ny_total - fict_y - 2);
+        double best = -std::numeric_limits<double>::infinity();
+        for (int j = fict_y; j < Ny_total - fict_y - 1; ++j) {
+            double s = jump_score(initial_cons[i][j], initial_cons[i][j + 1]);
+            if (s > best) {
+                best = s;
+                j_down = j;
+            }
+        }
+        const int j_up = j_down + 1;
+
+        std::vector<double> down_prim = cons_to_noncons(initial_cons[i][j_down], g);
+        std::vector<double> up_prim = cons_to_noncons(initial_cons[i][j_up], g);
+        double c_down = calc_sound_speed(down_prim, g);
+        double c_up = calc_sound_speed(up_prim, g);
+        auto [v_cont, p_cont] = calc_contact_pressure_velocity_y(down_prim, up_prim, c_down, c_up, g);
+
+        const double y_discont = y_min + (j_down - fict_y + 1) * dy;
+        for (int j = fict_y; j < Ny_total - fict_y; ++j) {
+            double y = y_min + (j - fict_y + 0.5) * dy;
+            double eta = (t > 1e-12) ? (y - y_discont) / t : (y < y_discont ? -1e10 : 1e10);
+            std::vector<double> res_1d = find_solution_y(down_prim, up_prim, v_cont, p_cont, c_down, c_up, eta, g);
+            for (int ii = fict_x; ii < Nx_total - fict_x; ++ii) {
+                analytic_solution[ii][j] = res_1d;
+            }
         }
     }
 

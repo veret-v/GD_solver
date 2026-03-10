@@ -1,138 +1,228 @@
-import numpy as np 
-import pandas as pd
-import matplotlib.pyplot as plt
+import argparse
 import glob
-import imageio
 import os
 import re
+import shutil
+from pathlib import Path
 
-def create_animation_1D(filenames, output_gif='animation.gif'):
-    # Извлекаем время из названий файлов и создаем словарь данных
-    data = {}
-    for filename in filenames:
-        # Используем регулярное выражение для извлечения времени
-        match = re.search(r'time_([\d.]+)\.csv', filename)
-        if match:
-            time = float(match.group(1))
-            df = pd.read_csv(filename)
-            data[time] = df
-    
-    # Сортируем временные точки
-    times = sorted(data.keys())
-    
-    filenames_write = []
-    
-    # Создаем кадры для каждого момента времени
-    for i, t in enumerate(times):
-        df = data[t]
-        
-        # Проверяем наличие необходимых колонок
-        if not all(col in df.columns for col in ['x', 'u', 'rho', 'p']):
-            print(f"Предупреждение: в файле для времени {t} отсутствуют некоторые колонки")
-            print(f"Доступные колонки: {df.columns.tolist()}")
+import imageio.v2 as imageio
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+
+METHOD_NAMES = {
+    0: "Godunov",
+    1: "Kolgan",
+    2: "Rodionov",
+    3: "HLL",
+    4: "HLLC",
+    5: "Rusanov",
+    6: "Osher",
+    7: "Roe",
+    8: "FLIC",
+}
+
+
+def load_profile_config(input_ini_path: Path):
+    axis = "x"
+    profile_index = -1
+    gamma = 1.4
+    equation_type = -1
+
+    if input_ini_path.exists():
+        in_system = False
+        with input_ini_path.open("r", encoding="utf-8", errors="ignore") as f:
+            for raw in f:
+                line = raw.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    in_system = (line[1:-1].strip().lower() == "system")
+                    continue
+                if not in_system or "=" not in line:
+                    continue
+                key, value = [s.strip() for s in line.split("=", 1)]
+                key = key.lower()
+                if key == "analytic_axis":
+                    axis = value.lower()
+                elif key == "analytic_profile_index":
+                    try:
+                        profile_index = int(value)
+                    except ValueError:
+                        pass
+                elif key == "g":
+                    try:
+                        gamma = float(value)
+                    except ValueError:
+                        pass
+                elif key == "equation_type":
+                    try:
+                        equation_type = int(value)
+                    except ValueError:
+                        pass
+
+    if axis not in ("x", "y"):
+        axis = "x"
+
+    method_tag = f"eq={equation_type} ({METHOD_NAMES.get(equation_type, 'Unknown')})"
+    return axis, profile_index, gamma, method_tag
+
+
+def clamp(value, lo, hi):
+    return max(lo, min(value, hi))
+
+
+def extract_time(path: Path):
+    m = re.search(r"time_([\d.]+)\.csv", path.name)
+    return float(m.group(1)) if m else None
+
+
+def select_1d_slice(df, axis, profile_index):
+    if axis == "x":
+        y_vals = np.sort(df["y"].unique())
+        idx = len(y_vals) // 4 if profile_index < 0 else clamp(profile_index, 0, len(y_vals) - 1)
+        fixed_value = y_vals[idx]
+        slice_df = df[np.isclose(df["y"], fixed_value)].copy()
+        coord = "x"
+        fixed_name = "y"
+    else:
+        x_vals = np.sort(df["x"].unique())
+        idx = len(x_vals) // 4 if profile_index < 0 else clamp(profile_index, 0, len(x_vals) - 1)
+        fixed_value = x_vals[idx]
+        slice_df = df[np.isclose(df["x"], fixed_value)].copy()
+        coord = "y"
+        fixed_name = "x"
+
+    # On duplicate rows, average numeric columns by profile coordinate.
+    numeric_cols = [c for c in slice_df.columns if pd.api.types.is_numeric_dtype(slice_df[c])]
+    slice_df = slice_df[numeric_cols].groupby(coord, as_index=False).mean().sort_values(coord)
+    return slice_df, coord, fixed_name, fixed_value
+
+
+def create_animation_1d(step_files, axis, profile_index, gamma, method_tag, output_gif, frame_dir, duration, use_markers):
+    output_gif.parent.mkdir(parents=True, exist_ok=True)
+    frame_dir.mkdir(parents=True, exist_ok=True)
+
+    times = []
+    for p in step_files:
+        t = extract_time(p)
+        if t is not None:
+            times.append((t, p))
+    times.sort(key=lambda x: x[0])
+
+    frame_files = []
+    style_num = "o-" if use_markers else "-"
+
+    for idx, (t, path) in enumerate(times):
+        df = pd.read_csv(path)
+        required = ["x", "y", "u", "rho", "p", "u_exact", "rho_exact", "p_exact"]
+        if not all(col in df.columns for col in required):
+            print(f"Пропуск t={t}: не хватает колонок для 1D профиля")
             continue
-        
-        # Извлекаем данные
-        x_coord = df['x']
-        velocity = df['u']
-        velocity_exact = df['u_exact']
-        density = df['rho']
-        density_exact = df['rho_exact']
-        pressure = df['p']
-        pressure_exact = df['p_exact']
-        
+
+        sl, coord, fixed_name, fixed_value = select_1d_slice(df, axis, profile_index)
+        if sl.empty:
+            print(f"Пропуск t={t}: срез пустой")
+            continue
+
+        coord_vals = sl[coord].to_numpy()
+        u_num = sl["u"].to_numpy()
+        u_ex = sl["u_exact"].to_numpy()
+        rho_num = sl["rho"].to_numpy()
+        rho_ex = sl["rho_exact"].to_numpy()
+        p_num = sl["p"].to_numpy()
+        p_ex = sl["p_exact"].to_numpy()
+        e_num = p_num / ((gamma - 1.0) * rho_num)
+        e_ex = p_ex / ((gamma - 1.0) * rho_ex)
+
         fig, axs = plt.subplots(4, 1, figsize=(12, 12))
-        fig.suptitle(f'Time: {t:.6f} s')
-        
-        # График скорости от координаты
-        axs[0].plot(x_coord, velocity, 'o-', label='analitycal_velocity', linewidth=2)
-        axs[0].plot(x_coord, velocity_exact, 'b-', label='numerical_velocity', linewidth=2)
-        axs[0].set_ylabel('Velocity')
+        fig.suptitle(f"Time: {t:.6f} s | {method_tag} | slice {coord} at {fixed_name}={fixed_value:.6f}")
+
+        axs[0].plot(coord_vals, u_num, style_num, label="u numerical", linewidth=1.5)
+        axs[0].plot(coord_vals, u_ex, "-", label="u exact", linewidth=2)
+        axs[0].set_ylabel("Velocity")
         axs[0].grid(True, alpha=0.3)
         axs[0].legend()
-        
-        # График плотности от координаты
-        axs[1].plot(x_coord, density, 'o-', label='Density_numerical', linewidth=2)
-        axs[1].plot(x_coord, density_exact, 'b-', label='Density_analitycal', linewidth=2)
-        axs[1].set_ylabel('Density')
+
+        axs[1].plot(coord_vals, rho_num, style_num, label="rho numerical", linewidth=1.5)
+        axs[1].plot(coord_vals, rho_ex, "-", label="rho exact", linewidth=2)
+        axs[1].set_ylabel("Density")
         axs[1].grid(True, alpha=0.3)
         axs[1].legend()
-        
-        # График давления от координаты
-        axs[2].plot(x_coord, pressure, 'o-', label='Pressure_numerical', linewidth=2)
-        axs[2].plot(x_coord, pressure_exact, 'b-', label='Pressure_analitycal', linewidth=2)
-        axs[2].set_ylabel('Pressure')
-        axs[2].set_xlabel('Coordinate')
+
+        axs[2].plot(coord_vals, p_num, style_num, label="p numerical", linewidth=1.5)
+        axs[2].plot(coord_vals, p_ex, "-", label="p exact", linewidth=2)
+        axs[2].set_ylabel("Pressure")
         axs[2].grid(True, alpha=0.3)
         axs[2].legend()
-        
-        internal_energy = (1 / 0.4) * pressure / density
-        internal_energy_exact = (1 / 0.4) * pressure_exact / density_exact
-        axs[3].plot(x_coord, internal_energy, 'o-', label='internal_energy', linewidth=2)
-        axs[3].plot(x_coord, internal_energy_exact, 'b-', label='internal_energy_exact', linewidth=2)
-        axs[3].set_ylabel('Internal energy')
-        axs[3].set_xlabel('Coordinate')
+
+        axs[3].plot(coord_vals, e_num, style_num, label="e numerical", linewidth=1.5)
+        axs[3].plot(coord_vals, e_ex, "-", label="e exact", linewidth=2)
+        axs[3].set_ylabel("Internal energy")
+        axs[3].set_xlabel(coord)
         axs[3].grid(True, alpha=0.3)
         axs[3].legend()
-        
-        plt.tight_layout()
-        
-        # Сохраняем кадр
-        filename = f'frame_{i:03d}.png'
-        plt.savefig(filename, dpi=100, bbox_inches='tight')
-        plt.close()
-        filenames_write.append(filename)
-        
-        print(f"Создан кадр {i+1}/{len(times)} для времени {t}")
-    
-    # Создаем GIF из кадров
-    if filenames_write:
-        print("Создание GIF...")
-        with imageio.get_writer(output_gif, mode='I', duration=0.5) as writer:
-            for filename in filenames_write:
-                image = imageio.imread(filename)
-                writer.append_data(image)
-        
-        # Удаляем временные файлы кадров
-        for filename in filenames_write:
-            os.remove(filename)
-        
-        print(f"GIF успешно создан: {output_gif}")
-    else:
-        print("Не создано ни одного кадра!")
 
-# Основной код
+        plt.tight_layout()
+        frame = frame_dir / f"frame_1d_{idx:04d}.png"
+        plt.savefig(frame, dpi=100, bbox_inches="tight")
+        plt.close()
+        frame_files.append(frame)
+        print(f"Создан кадр {idx + 1}/{len(times)} для времени {t:.6f}")
+
+    if not frame_files:
+        print("Не создано ни одного кадра!")
+        return 1
+
+    print("Создание GIF...")
+    with imageio.get_writer(output_gif, mode="I", duration=duration) as writer:
+        for frame in frame_files:
+            writer.append_data(imageio.imread(frame))
+
+    shutil.rmtree(frame_dir, ignore_errors=True)
+    print(f"GIF успешно создан: {output_gif}")
+    return 0
+
+
+def main():
+    project_root = Path(__file__).resolve().parents[1]
+
+    ap = argparse.ArgumentParser(description="Build 1D animation.gif from step_*_time_*.csv")
+    ap.add_argument("--steps-dir", default=str(project_root / "output" / "steps"))
+    ap.add_argument("--output-gif", default=str(project_root / "animation.gif"))
+    ap.add_argument("--input-ini", default=str(project_root / "configs" / "input.ini"))
+    ap.add_argument("--frame-dir", default=None)
+    ap.add_argument("--duration", type=float, default=0.5)
+    ap.add_argument("--no-markers", action="store_true", help="Use plain lines for faster plotting")
+    args = ap.parse_args()
+
+    steps_dir = Path(args.steps_dir).resolve()
+    output_gif = Path(args.output_gif).resolve()
+    input_ini = Path(args.input_ini).resolve()
+    frame_dir = Path(args.frame_dir).resolve() if args.frame_dir else (output_gif.parent / ".frames_tmp")
+
+    step_files = sorted(Path(p) for p in glob.glob(str(steps_dir / "step_*_time_*.csv")))
+    if not step_files:
+        print(f"step_*_time_*.csv не найдены в {steps_dir}")
+        return 1
+
+    axis, profile_index, gamma, method_tag = load_profile_config(input_ini)
+    print(f"Найдено {len(step_files)} файлов")
+    print(f"Профиль для animation.gif: axis={axis}, index={profile_index}, {method_tag}")
+
+    return create_animation_1d(
+        step_files,
+        axis,
+        profile_index,
+        gamma,
+        method_tag,
+        output_gif,
+        frame_dir,
+        args.duration,
+        use_markers=(not args.no_markers),
+    )
+
+
 if __name__ == "__main__":
-    # Исправленный путь - используем сырую строку или двойные обратные слеши
-    path = r'C:\solvver\GD_solver\output\steps'  # Сырая строка
-    # Или: path = 'C:\\solvver\\GD_solver\\output\\steps'  # Двойные обратные слеши
-    
-    # Проверяем существование пути
-    if not os.path.exists(path):
-        print(f"Ошибка: путь {path} не существует!")
-        exit()
-    
-    # Ищем файлы
-    filenames = glob.glob(os.path.join(path, "*.csv"))
-    
-    if not filenames:
-        print(f"CSV файлы не найдены в папке: {path}")
-        # Попробуем найти файлы в текущей директории
-        filenames = glob.glob("step_*_time_*.csv")
-        if filenames:
-            print("Найдены файлы в текущей директории")
-    
-    if not filenames:
-        print("Файлы не найдены!")
-        exit()
-    
-    print(f"Найдено {len(filenames)} файлов")
-    
-    # Показываем структуру первого файла для отладки
-    if filenames:
-        sample_df = pd.read_csv(filenames[0])
-        print(f"Структура первого файла ({filenames[0]}):")
-        print(f"Колонки: {sample_df.columns.tolist()}")
-        print(f"Размер: {sample_df.shape}")
-    
-    create_animation_1D(filenames)
+    raise SystemExit(main())

@@ -59,8 +59,11 @@ std::vector<double> diff_flux_ncons_y(const std::vector<double>& v_ncons, double
 std::vector<std::vector<std::vector<double>>> compute_analytic_solution_2d(
     double x_min, double x_max, double y_min, double y_max,
     int Nx, int Ny, int fict_x, int fict_y, 
-    double t, const std::vector<double>& left_prim, 
-    const std::vector<double>& right_prim, double g);
+    double t,
+    const std::vector<std::vector<std::vector<double>>>& initial_cons,
+    int analytic_axis,
+    int analytic_profile_index,
+    double g);
 
 double minmod(double a, double b);
 

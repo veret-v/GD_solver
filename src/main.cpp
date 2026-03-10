@@ -11,6 +11,7 @@
 #include "./parser.h"
 #include "./utils.h"
 #include "./solver.h"
+#include "./flic.h"
 #include "./point.h"
 #include "./grid.h"
 #include <script.h>
@@ -18,11 +19,9 @@
 int main(int argc, char** argv) {
 // Изменено на единый файл input.ini
     std::string system_ini = "../configs/input.ini";
-    std::string cases_ini = "../configs/SODA.ini";
 
     // чтение системных параметров из объединенного файла
     IniParser sys(system_ini);
-    std::string case_name = sys.getString("case_name");
     double x_min = sys.getDouble("x_min");
     double x_max = sys.getDouble("x_max");
     double y_min = sys.getDouble("y_min");
@@ -41,16 +40,11 @@ int main(int argc, char** argv) {
     std::string boundary_type_up = sys.getString("boundary_type_up");
     std::string boundary_type_down = sys.getString("boundary_type_down");
     int equation_type = sys.getInt("equation_type");
-
-    SectionedIniParser cases(cases_ini);
-    double rho_L = cases.getDouble(case_name, "rho_L");
-    double u_L = cases.getDouble(case_name, "u_L");
-    double v_L = cases.getDouble(case_name, "v_L");
-    double p_L = cases.getDouble(case_name, "p_L");
-    double rho_R = cases.getDouble(case_name, "rho_R");
-    double u_R = cases.getDouble(case_name, "u_R");
-    double v_R = cases.getDouble(case_name, "v_R");
-    double p_R = cases.getDouble(case_name, "p_R");
+    std::string analytic_axis = "x";
+    int analytic_profile_index = -1;
+    try { analytic_axis = sys.getString("analytic_axis"); } catch (...) {}
+    try { analytic_profile_index = sys.getInt("analytic_profile_index"); } catch (...) {}
+    const int analytic_axis_code = (analytic_axis == "y" || analytic_axis == "Y") ? 1 : 0;
 
     double dx = (x_max - x_min) / Nx; 
     double dy = (y_max - y_min) / Ny;
@@ -62,8 +56,9 @@ int main(int argc, char** argv) {
     // инициализация сетки
     std::vector<std::vector<std::vector<double>>> u_prev(Nx_with_fict_cells,  std::vector<std::vector<double>>(Ny_with_fict_cells, std::vector<double>(M)));
     std::vector<std::vector<std::vector<double>>> u_next(Nx_with_fict_cells,  std::vector<std::vector<double>>(Ny_with_fict_cells, std::vector<double>(M)));
-    parseAndInitialize(u_prev, "C:\\solvver\\GD_solver\\configs\\input.ini", fict_x, fict_y, g);
-    parseAndInitialize(u_next, "C:\\solvver\\GD_solver\\configs\\input.ini", fict_x, fict_y, g);
+    parseAndInitialize(u_prev, system_ini, fict_x, fict_y, g);
+    parseAndInitialize(u_next, system_ini, fict_x, fict_y, g);
+    const auto u_initial = u_prev;
     //set_sod_initial_conditions(u_prev, u_next, Nx, x_min, x_max, Ny, y_min, y_max,
       //                        rho_R, u_R, v_R, p_R, rho_L, u_L, v_L, p_L, g, fict_x, fict_y);
 
@@ -249,72 +244,82 @@ int main(int argc, char** argv) {
         }
            
 
-        // --- ОСНОВНОЙ ЦИКЛ ПО ЯЧЕЙКАМ (Расчет потоков и обновление) ---
-        for(int i = fict_x; i < Nx_with_fict_cells - fict_x; ++i) {
-            for(int j = fict_y; j < Ny_with_fict_cells - fict_y; ++j){
-            std::vector<double> left_flux(M), right_flux(M);
-            std::vector<double> up_flux(M), down_flux(M);
+        // --- ОСНОВНОЙ ШАГ ПО ВРЕМЕНИ ---
+        if (equation_type == 8) { // FLIC
+            flic_step_2d(u_prev, u_next, dt, dx, dy, g,
+                         Nx_with_fict_cells, Ny_with_fict_cells, fict_x, fict_y,
+                         left_bc_code, right_bc_code, up_bc_code, down_bc_code);
+        } else {
+            // --- ОСНОВНОЙ ЦИКЛ ПО ЯЧЕЙКАМ (Расчет потоков и обновление) ---
+            for(int i = fict_x; i < Nx_with_fict_cells - fict_x; ++i) {
+                for(int j = fict_y; j < Ny_with_fict_cells - fict_y; ++j){
+                std::vector<double> left_flux(M), right_flux(M);
+                std::vector<double> up_flux(M), down_flux(M);
 
-            // Выбор схемы для расчета потоков
-            if(equation_type == 0){ // Godunov
-                left_flux = godunov_flux_x(u_prev[i-1][j], u_prev[i][j], g);
-                right_flux = godunov_flux_x(u_prev[i][j], u_prev[i+1][j], g);
-                up_flux = godunov_flux_y(u_prev[i][j], u_prev[i][j+1], g);
-                down_flux = godunov_flux_y(u_prev[i][j-1], u_prev[i][j], g);
-            }
-            else if(equation_type == 1){ // Kolgan
-                // Используем заранее рассчитанные грани 
-                left_flux = godunov_flux_x(right_face_x[i-1][j], left_face_x[i][j], g);
-                right_flux = godunov_flux_x(right_face_x[i][j], left_face_x[i+1][j], g);
-                up_flux = godunov_flux_y(right_face_y[i][j], left_face_y[i][j+1], g);
-                down_flux = godunov_flux_y(right_face_y[i][j-1], left_face_y[i][j], g);
-            }
-            else if(equation_type == 2){ // Rodionov
-                // Используем заранее рассчитанные left/right 
-                left_flux = godunov_flux_x(rec_x_R[i-1][j], rec_x_L[i][j], g);
-                right_flux = godunov_flux_x(rec_x_R[i][j], rec_x_L[i+1][j], g);
-                up_flux = godunov_flux_y(rec_y_R[i][j], rec_y_L[i][j+1], g);
-                down_flux = godunov_flux_y(rec_y_R[i][j-1], rec_y_L[i][j], g);
-            }
-            else if (equation_type == 3){ // HLL
-                left_flux = hll_flux_new(u_prev[i-1][j], u_prev[i][j], g, 0);
-                right_flux = hll_flux_new(u_prev[i][j], u_prev[i+1][j], g, 0);
-                up_flux = hll_flux_new(u_prev[i][j], u_prev[i][j+1], g, 1);
-                down_flux = hll_flux_new(u_prev[i][j-1], u_prev[i][j], g, 1);
-            }
-            else if(equation_type == 4){ // HLLC
-                left_flux = hllc_flux_new(u_prev[i-1][j], u_prev[i][j], g, 0);
-                right_flux = hllc_flux_new(u_prev[i][j], u_prev[i+1][j], g, 0);
-                up_flux = hllc_flux_new(u_prev[i][j], u_prev[i][j+1], g, 1);
-                down_flux = hllc_flux_new(u_prev[i][j-1], u_prev[i][j], g, 1);
-            }
-            else if(equation_type == 5){ // Rusanov 
-                left_flux = rusanov_2d(u_prev[i-1][j], u_prev[i][j], g, 0);
-                right_flux = rusanov_2d(u_prev[i][j], u_prev[i+1][j], g, 0);
-                up_flux = rusanov_2d(u_prev[i][j], u_prev[i][j+1], g, 1);
-                down_flux = rusanov_2d(u_prev[i][j-1], u_prev[i][j], g, 1);
-            }
-            else if(equation_type == 6){ // Osher
-                left_flux = osher_flux_2d(u_prev[i-1][j], u_prev[i][j], g, 0);
-                right_flux = osher_flux_2d(u_prev[i][j], u_prev[i+1][j], g, 0);
-                up_flux = osher_flux_2d(u_prev[i][j], u_prev[i][j+1], g, 1);
-                down_flux = osher_flux_2d(u_prev[i][j-1], u_prev[i][j], g, 1);
-            }
-            else if(equation_type == 7){ // Roe
-                left_flux = roe_flux_2d(u_prev[i-1][j], u_prev[i][j], g, 0);
-                right_flux = roe_flux_2d(u_prev[i][j], u_prev[i+1][j], g, 0);
-                up_flux = roe_flux_2d(u_prev[i][j], u_prev[i][j+1], g, 1);
-                down_flux = roe_flux_2d(u_prev[i][j-1], u_prev[i][j], g, 1);
-            }
+                // Выбор схемы для расчета потоков
+                if(equation_type == 0){ // Godunov
+                    left_flux = godunov_flux_x(u_prev[i-1][j], u_prev[i][j], g);
+                    right_flux = godunov_flux_x(u_prev[i][j], u_prev[i+1][j], g);
+                    up_flux = godunov_flux_y(u_prev[i][j], u_prev[i][j+1], g);
+                    down_flux = godunov_flux_y(u_prev[i][j-1], u_prev[i][j], g);
+                }
+                else if(equation_type == 1){ // Kolgan
+                    // Используем заранее рассчитанные грани 
+                    left_flux = godunov_flux_x(right_face_x[i-1][j], left_face_x[i][j], g);
+                    right_flux = godunov_flux_x(right_face_x[i][j], left_face_x[i+1][j], g);
+                    up_flux = godunov_flux_y(right_face_y[i][j], left_face_y[i][j+1], g);
+                    down_flux = godunov_flux_y(right_face_y[i][j-1], left_face_y[i][j], g);
+                }
+                else if(equation_type == 2){ // Rodionov
+                    // Используем заранее рассчитанные left/right 
+                    left_flux = godunov_flux_x(rec_x_R[i-1][j], rec_x_L[i][j], g);
+                    right_flux = godunov_flux_x(rec_x_R[i][j], rec_x_L[i+1][j], g);
+                    up_flux = godunov_flux_y(rec_y_R[i][j], rec_y_L[i][j+1], g);
+                    down_flux = godunov_flux_y(rec_y_R[i][j-1], rec_y_L[i][j], g);
+                }
+                else if (equation_type == 3){ // HLL
+                    left_flux = hll_flux_new(u_prev[i-1][j], u_prev[i][j], g, 0);
+                    right_flux = hll_flux_new(u_prev[i][j], u_prev[i+1][j], g, 0);
+                    up_flux = hll_flux_new(u_prev[i][j], u_prev[i][j+1], g, 1);
+                    down_flux = hll_flux_new(u_prev[i][j-1], u_prev[i][j], g, 1);
+                }
+                else if(equation_type == 4){ // HLLC
+                    left_flux = hllc_flux_new(u_prev[i-1][j], u_prev[i][j], g, 0);
+                    right_flux = hllc_flux_new(u_prev[i][j], u_prev[i+1][j], g, 0);
+                    up_flux = hllc_flux_new(u_prev[i][j], u_prev[i][j+1], g, 1);
+                    down_flux = hllc_flux_new(u_prev[i][j-1], u_prev[i][j], g, 1);
+                }
+                else if(equation_type == 5){ // Rusanov 
+                    left_flux = rusanov_2d(u_prev[i-1][j], u_prev[i][j], g, 0);
+                    right_flux = rusanov_2d(u_prev[i][j], u_prev[i+1][j], g, 0);
+                    up_flux = rusanov_2d(u_prev[i][j], u_prev[i][j+1], g, 1);
+                    down_flux = rusanov_2d(u_prev[i][j-1], u_prev[i][j], g, 1);
+                }
+                else if(equation_type == 6){ // Osher
+                    left_flux = osher_flux_2d(u_prev[i-1][j], u_prev[i][j], g, 0);
+                    right_flux = osher_flux_2d(u_prev[i][j], u_prev[i+1][j], g, 0);
+                    up_flux = osher_flux_2d(u_prev[i][j], u_prev[i][j+1], g, 1);
+                    down_flux = osher_flux_2d(u_prev[i][j-1], u_prev[i][j], g, 1);
+                }
+                else if(equation_type == 7){ // Roe
+                    left_flux = roe_flux_2d(u_prev[i-1][j], u_prev[i][j], g, 0);
+                    right_flux = roe_flux_2d(u_prev[i][j], u_prev[i+1][j], g, 0);
+                    up_flux = roe_flux_2d(u_prev[i][j], u_prev[i][j+1], g, 1);
+                    down_flux = roe_flux_2d(u_prev[i][j-1], u_prev[i][j], g, 1);
+                }
+                else {
+                    throw std::runtime_error("Unsupported equation_type: " + std::to_string(equation_type));
+                }
 
-            // Обновление решения u_next
-            for(int k = 0; k < M; ++k) {
-                // Стандартный конечно-объемный апдейт
-                u_next[i][j][k] = u_prev[i][j][k] - (dt / dx) * (right_flux[k] - left_flux[k])
-                                    - (dt / dy) * (up_flux[k] - down_flux[k]);
-            }
-            
-            enforce_physical_state(u_next[i][j], g);
+                // Обновление решения u_next
+                for(int k = 0; k < M; ++k) {
+                    // Стандартный конечно-объемный апдейт
+                    u_next[i][j][k] = u_prev[i][j][k] - (dt / dx) * (right_flux[k] - left_flux[k])
+                                        - (dt / dy) * (up_flux[k] - down_flux[k]);
+                }
+                
+                enforce_physical_state(u_next[i][j], g);
+                }
             }
         }
             /*
@@ -336,10 +341,10 @@ int main(int argc, char** argv) {
             filename << steps_dir << "step_" << step << "_time_" << std::fixed << std::setprecision(6) << curr_time << ".csv";
             
             // Аналитическое решение
-            std::vector<double> left_prim{rho_L, u_L, v_L, p_L};
-            std::vector<double> right_prim{rho_R, u_R, v_R, p_R};
-            auto analytic_solution = compute_analytic_solution_2d(x_min, x_max, y_min, y_max, Nx, Ny, fict_x, fict_y,
-                                                             curr_time, left_prim, right_prim, g);
+            auto analytic_solution = compute_analytic_solution_2d(
+                x_min, x_max, y_min, y_max, Nx, Ny, fict_x, fict_y,
+                curr_time, u_initial, analytic_axis_code, analytic_profile_index, g
+            );
             
             std::ofstream fout_step(filename.str());
             fout_step << "x,y,rho,u,v,p,rho_exact,u_exact,v_exact,p_exact\n";
@@ -366,10 +371,9 @@ int main(int argc, char** argv) {
     std::string output_dir = "../output/steps/";
     std::filesystem::create_directories(output_dir);
     
-    std::vector<double> left_prim{rho_L, u_L, v_L, p_L};
-    std::vector<double> right_prim{rho_R, u_R, v_R, p_R};
     auto analytic_final = compute_analytic_solution_2d(
-    x_min, x_max, y_min, y_max, Nx, Ny, fict_x, fict_y, curr_time, left_prim, right_prim, g);
+    x_min, x_max, y_min, y_max, Nx, Ny, fict_x, fict_y,
+    curr_time, u_initial, analytic_axis_code, analytic_profile_index, g);
     
     std::ofstream fout(output_dir + "final_results.csv");
     fout << "x,y,rho,u,v,p,rho_exact,u_exact,v_exact,p_exact\n";

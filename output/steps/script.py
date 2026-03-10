@@ -5,8 +5,36 @@ import shutil
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import imageio
+import imageio.v2 as imageio
 from matplotlib.colors import Normalize
+
+METHOD_NAMES = {
+    0: "Godunov", 1: "Kolgan", 2: "Rodionov", 3: "HLL",
+    4: "HLLC", 5: "Rusanov", 6: "Osher", 7: "Roe", 8: "FLIC",
+}
+
+def load_method_tag():
+    cfg_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs", "input.ini"))
+    equation_type = -1
+    if os.path.exists(cfg_path):
+        in_system = False
+        with open(cfg_path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw in f:
+                line = raw.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    in_system = (line[1:-1].strip().lower() == "system")
+                    continue
+                if not in_system or "=" not in line:
+                    continue
+                key, value = [s.strip() for s in line.split("=", 1)]
+                if key.lower() == "equation_type":
+                    try:
+                        equation_type = int(value)
+                    except ValueError:
+                        pass
+    return f"eq={equation_type} ({METHOD_NAMES.get(equation_type, 'Unknown')})"
 
 def extract_time(filename):
     """Извлекает значение времени из имени файла."""
@@ -28,7 +56,7 @@ def prepare_grid(df, var_name):
                 mat[i, j] = val.iloc[0]
     return x_vals, y_vals, mat
 
-def create_frame_2d(df, time, var_name, vmin=None, vmax=None, output_path=None):
+def create_frame_2d(df, time, var_name, method_tag, vmin=None, vmax=None, output_path=None):
     """Создаёт один кадр (2D-поле) и сохраняет его."""
     x, y, Z = prepare_grid(df, var_name)
     
@@ -42,13 +70,13 @@ def create_frame_2d(df, time, var_name, vmin=None, vmax=None, output_path=None):
                          norm=Normalize(vmin=vmin, vmax=vmax))
     ax.set_xlabel('x')
     ax.set_ylabel('y')
-    ax.set_title(f'{var_name} at time = {time:.4f}')
+    ax.set_title(f'{var_name} at time = {time:.4f} | {method_tag}')
     fig.colorbar(mesh, ax=ax, label=var_name)
     fig.tight_layout()
     fig.savefig(output_path, dpi=100)
     plt.close(fig)
 
-def create_profile_x_frame(df, time, var_name, y_fixed, vmin, vmax, output_path, exact_col=None):
+def create_profile_x_frame(df, time, var_name, y_fixed, method_tag, vmin, vmax, output_path, exact_col=None):
     """
     Создаёт кадр профиля вдоль оси X при фиксированном y = y_fixed.
     Если exact_col задан и существует в df, добавляется кривая точного решения.
@@ -68,14 +96,14 @@ def create_profile_x_frame(df, time, var_name, y_fixed, vmin, vmax, output_path,
     
     ax.set_xlabel('x')
     ax.set_ylabel(var_name)
-    ax.set_title(f'{var_name} profile at y = {nearest_y:.3f}, time = {time:.4f}')
+    ax.set_title(f'{var_name} profile at y = {nearest_y:.3f}, time = {time:.4f} | {method_tag}')
     ax.set_ylim(vmin, vmax)
     ax.grid(True, linestyle='--', alpha=0.7)
     fig.tight_layout()
     fig.savefig(output_path, dpi=100)
     plt.close(fig)
 
-def create_profile_y_frame(df, time, var_name, x_fixed, vmin, vmax, output_path, exact_col=None):
+def create_profile_y_frame(df, time, var_name, x_fixed, method_tag, vmin, vmax, output_path, exact_col=None):
     """
     Создаёт кадр профиля вдоль оси Y при фиксированном x = x_fixed.
     Если exact_col задан и существует в df, добавляется кривая точного решения.
@@ -92,7 +120,7 @@ def create_profile_y_frame(df, time, var_name, x_fixed, vmin, vmax, output_path,
     
     ax.set_xlabel('y')
     ax.set_ylabel(var_name)
-    ax.set_title(f'{var_name} profile at x = {nearest_x:.3f}, time = {time:.4f}')
+    ax.set_title(f'{var_name} profile at x = {nearest_x:.3f}, time = {time:.4f} | {method_tag}')
     ax.set_ylim(vmin, vmax)
     ax.grid(True, linestyle='--', alpha=0.7)
     fig.tight_layout()
@@ -118,6 +146,7 @@ def create_gif(file_pattern, var_name, output_gif='animation.gif', fps=5,
         exact_suffix   : суффикс для имени колонки точного решения (например, '_exact').
                          Итоговая колонка будет var_name + exact_suffix.
     """
+    method_tag = load_method_tag()
     files = glob.glob(file_pattern)
     if not files:
         print(f"Файлы по шаблону '{file_pattern}' не найдены.")
@@ -183,7 +212,7 @@ def create_gif(file_pattern, var_name, output_gif='animation.gif', fps=5,
         if make_2d:
             frame_path = os.path.join(temp_dir, f"frame_2d_{i:04d}.png")
             try:
-                create_frame_2d(df, time_val, var_name, global_min, global_max, frame_path)
+                create_frame_2d(df, time_val, var_name, method_tag, global_min, global_max, frame_path)
                 frames_2d.append(frame_path)
             except Exception as e:
                 print(f"Ошибка при создании 2D-кадра для {f}: {e}")
@@ -191,7 +220,7 @@ def create_gif(file_pattern, var_name, output_gif='animation.gif', fps=5,
         if make_profile_x:
             frame_path = os.path.join(temp_dir, f"frame_prof_x_{i:04d}.png")
             try:
-                create_profile_x_frame(df, time_val, var_name, y_fixed,
+                create_profile_x_frame(df, time_val, var_name, y_fixed, method_tag,
                                         global_min, global_max, frame_path,
                                         exact_col=exact_col if exact_col in df.columns else None)
                 frames_prof_x.append(frame_path)
@@ -201,7 +230,7 @@ def create_gif(file_pattern, var_name, output_gif='animation.gif', fps=5,
         if make_profile_y:
             frame_path = os.path.join(temp_dir, f"frame_prof_y_{i:04d}.png")
             try:
-                create_profile_y_frame(df, time_val, var_name, x_fixed,
+                create_profile_y_frame(df, time_val, var_name, x_fixed, method_tag,
                                         global_min, global_max, frame_path,
                                         exact_col=exact_col if exact_col in df.columns else None)
                 frames_prof_y.append(frame_path)
@@ -244,23 +273,23 @@ def create_gif(file_pattern, var_name, output_gif='animation.gif', fps=5,
 
 if __name__ == "__main__":
     # Пример: для 'rho' создаём 2D, профили X и Y с точным решением (колонка 'rho_exact')
-    create_gif('step_*.csv', var_name='rho',
+    create_gif('step_*_time_*.csv', var_name='rho',
                output_gif='rho_evolution.gif', fps=5,
                make_2d=True, make_profile_x=True, make_profile_y=True,
                exact_suffix='_exact')
     
     # Для других переменных можно аналогично:
-    create_gif('step_*.csv', var_name='u',
+    create_gif('step_*_time_*.csv', var_name='u',
                 output_gif='u_evolution.gif', fps=5,
                 make_2d=True, make_profile_x=True, make_profile_y=True,
                 exact_suffix='_exact')
     
-    create_gif('step_*.csv', var_name='v',
+    create_gif('step_*_time_*.csv', var_name='v',
                 output_gif='v_evolution.gif', fps=5,
                 make_2d=True, make_profile_x=True, make_profile_y=True,
                 exact_suffix='_exact')
     
-    create_gif('step_*.csv', var_name='p',
+    create_gif('step_*_time_*.csv', var_name='p',
                 output_gif='p_evolution.gif', fps=5,
                 make_2d=True, make_profile_x=True, make_profile_y=True,
                 exact_suffix='_exact')

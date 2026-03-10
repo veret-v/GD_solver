@@ -11,6 +11,7 @@ add_executable(${PROJECT_NAME}
     src/point.cpp
     src/grid.cpp
     src/solver.cpp
+    src/flic.cpp
     src/script.cpp
 )
 

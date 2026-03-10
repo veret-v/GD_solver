@@ -3,14 +3,42 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 import glob
-import imageio
+import imageio.v2 as imageio
 import os
 import re
 import traceback
 
-def create_2d_animation(filenames, output_gif='animation_2d.gif'):
+def load_method_tag(project_root):
+    equation_type = -1
+    cfg_path = os.path.join(project_root, "configs", "input.ini")
+    if os.path.exists(cfg_path):
+        in_system = False
+        with open(cfg_path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw in f:
+                line = raw.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    in_system = (line[1:-1].strip().lower() == "system")
+                    continue
+                if not in_system or "=" not in line:
+                    continue
+                key, value = [s.strip() for s in line.split("=", 1)]
+                if key.lower() == "equation_type":
+                    try:
+                        equation_type = int(value)
+                    except ValueError:
+                        pass
+    method_names = {
+        0: "Godunov", 1: "Kolgan", 2: "Rodionov", 3: "HLL",
+        4: "HLLC", 5: "Rusanov", 6: "Osher", 7: "Roe", 8: "FLIC",
+    }
+    return f"eq={equation_type} ({method_names.get(equation_type, 'Unknown')})"
+
+
+def create_2d_animation(filenames, method_tag, output_gif='heatmap_2d.gif'):
     """
-    Создаёт GIF-анимацию, показывающую 2D-распределения величин.
+    РЎРѕР·РґР°С‘С‚ GIF-Р°РЅРёРјР°С†РёСЋ, РїРѕРєР°Р·С‹РІР°СЋС‰СѓСЋ 2D-СЂР°СЃРїСЂРµРґРµР»РµРЅРёСЏ РІРµР»РёС‡РёРЅ.
     """
     data = {}
     for filename in filenames:
@@ -19,17 +47,17 @@ def create_2d_animation(filenames, output_gif='animation_2d.gif'):
             try:
                 time = float(match.group(1))
                 if not np.isfinite(time):
-                    print(f"Предупреждение: время {time} не конечное, пропускаем {filename}")
+                    print(f"РџСЂРµРґСѓРїСЂРµР¶РґРµРЅРёРµ: РІСЂРµРјСЏ {time} РЅРµ РєРѕРЅРµС‡РЅРѕРµ, РїСЂРѕРїСѓСЃРєР°РµРј {filename}")
                     continue
                 df = pd.read_csv(filename)
                 data[time] = df
             except Exception as e:
-                print(f"Ошибка при чтении {filename}: {e}")
+                print(f"РћС€РёР±РєР° РїСЂРё С‡С‚РµРЅРёРё {filename}: {e}")
                 continue
 
     times = sorted(data.keys())
     if not times:
-        print("Нет корректных данных по времени!")
+        print("РќРµС‚ РєРѕСЂСЂРµРєС‚РЅС‹С… РґР°РЅРЅС‹С… РїРѕ РІСЂРµРјРµРЅРё!")
         return
 
     frame_files = []
@@ -45,7 +73,7 @@ def create_2d_animation(filenames, output_gif='animation_2d.gif'):
                 pivot = pivot.reindex(index=y_vals, columns=x_vals)
                 return pivot.values
 
-            # Загружаем данные
+            # Р—Р°РіСЂСѓР¶Р°РµРј РґР°РЅРЅС‹Рµ
             rho = get_2d('rho')
             rho_ex = get_2d('rho_exact')
             u = get_2d('u')
@@ -55,26 +83,26 @@ def create_2d_animation(filenames, output_gif='animation_2d.gif'):
             p = get_2d('p')
             p_ex = get_2d('p_exact')
 
-            # Проверка на наличие нечисловых значений
+            # РџСЂРѕРІРµСЂРєР° РЅР° РЅР°Р»РёС‡РёРµ РЅРµС‡РёСЃР»РѕРІС‹С… Р·РЅР°С‡РµРЅРёР№
             for name, arr in [('rho', rho), ('rho_ex', rho_ex), ('u', u), ('u_ex', u_ex),
                               ('v', v), ('v_ex', v_ex), ('p', p), ('p_ex', p_ex)]:
                 if not np.all(np.isfinite(arr)):
-                    print(f"Кадр {i} (время {t}): массив {name} содержит нечисловые значения, пропускаем")
+                    print(f"РљР°РґСЂ {i} (РІСЂРµРјСЏ {t}): РјР°СЃСЃРёРІ {name} СЃРѕРґРµСЂР¶РёС‚ РЅРµС‡РёСЃР»РѕРІС‹Рµ Р·РЅР°С‡РµРЅРёСЏ, РїСЂРѕРїСѓСЃРєР°РµРј")
                     raise ValueError("Non-finite data")
 
             gamma = 1.4
             e = p / (rho * (gamma - 1))
             e_ex = p_ex / (rho_ex * (gamma - 1))
             if not (np.all(np.isfinite(e)) and np.all(np.isfinite(e_ex))):
-                print(f"Кадр {i}: внутренняя энергия содержит inf/nan, пропускаем")
+                print(f"РљР°РґСЂ {i}: РІРЅСѓС‚СЂРµРЅРЅСЏСЏ СЌРЅРµСЂРіРёСЏ СЃРѕРґРµСЂР¶РёС‚ inf/nan, РїСЂРѕРїСѓСЃРєР°РµРј")
                 raise ValueError("Non-finite internal energy")
 
-            # Создаём фигуру
+            # РЎРѕР·РґР°С‘Рј С„РёРіСѓСЂСѓ
             fig, axs = plt.subplots(3, 2, figsize=(14, 18))
-            # Упрощённый заголовок (без форматирования, чтобы избежать возможной проблемы)
-            fig.suptitle(f'Time: {t} s', fontsize=16)
+            # РЈРїСЂРѕС‰С‘РЅРЅС‹Р№ Р·Р°РіРѕР»РѕРІРѕРє (Р±РµР· С„РѕСЂРјР°С‚РёСЂРѕРІР°РЅРёСЏ, С‡С‚РѕР±С‹ РёР·Р±РµР¶Р°С‚СЊ РІРѕР·РјРѕР¶РЅРѕР№ РїСЂРѕР±Р»РµРјС‹)
+            fig.suptitle(f'Time: {t} s | {method_tag}', fontsize=16)
 
-            # Плотность
+            # РџР»РѕС‚РЅРѕСЃС‚СЊ
             vmin_rho = min(rho.min(), rho_ex.min())
             vmax_rho = max(rho.max(), rho_ex.max())
             im1 = axs[0,0].pcolormesh(X, Y, rho, shading='auto', norm=Normalize(vmin_rho, vmax_rho), cmap='viridis')
@@ -87,7 +115,7 @@ def create_2d_animation(filenames, output_gif='animation_2d.gif'):
             axs[0,1].set_xlabel('x'); axs[0,1].set_ylabel('y')
             plt.colorbar(im2, ax=axs[0,1])
 
-            # x-скорость
+            # x-СЃРєРѕСЂРѕСЃС‚СЊ
             vmin_u = min(u.min(), u_ex.min())
             vmax_u = max(u.max(), u_ex.max())
             im3 = axs[1,0].pcolormesh(X, Y, u, shading='auto', norm=Normalize(vmin_u, vmax_u), cmap='plasma')
@@ -100,7 +128,7 @@ def create_2d_animation(filenames, output_gif='animation_2d.gif'):
             axs[1,1].set_xlabel('x'); axs[1,1].set_ylabel('y')
             plt.colorbar(im4, ax=axs[1,1])
 
-            # Внутренняя энергия
+            # Р’РЅСѓС‚СЂРµРЅРЅСЏСЏ СЌРЅРµСЂРіРёСЏ
             vmin_e = min(e.min(), e_ex.min())
             vmax_e = max(e.max(), e_ex.max())
             im5 = axs[2,0].pcolormesh(X, Y, e, shading='auto', norm=Normalize(vmin_e, vmax_e), cmap='inferno')
@@ -118,15 +146,15 @@ def create_2d_animation(filenames, output_gif='animation_2d.gif'):
             plt.savefig(frame_name, dpi=100, bbox_inches='tight')
             plt.close()
             frame_files.append(frame_name)
-            print(f"Кадр {i+1}/{len(times)} (время {t}) успешно создан")
+            print(f"РљР°РґСЂ {i+1}/{len(times)} (РІСЂРµРјСЏ {t}) СѓСЃРїРµС€РЅРѕ СЃРѕР·РґР°РЅ")
 
         except Exception as e:
-            print(f"Ошибка при обработке кадра {i} (время {t}):")
+            print(f"РћС€РёР±РєР° РїСЂРё РѕР±СЂР°Р±РѕС‚РєРµ РєР°РґСЂР° {i} (РІСЂРµРјСЏ {t}):")
             traceback.print_exc()
-            # Продолжаем со следующим кадром, не останавливая цикл
+            # РџСЂРѕРґРѕР»Р¶Р°РµРј СЃРѕ СЃР»РµРґСѓСЋС‰РёРј РєР°РґСЂРѕРј, РЅРµ РѕСЃС‚Р°РЅР°РІР»РёРІР°СЏ С†РёРєР»
 
     if frame_files:
-        print("Создание GIF...")
+        print("РЎРѕР·РґР°РЅРёРµ GIF...")
         try:
             with imageio.get_writer(output_gif, mode='I', duration=0.5) as writer:
                 for fname in frame_files:
@@ -134,24 +162,26 @@ def create_2d_animation(filenames, output_gif='animation_2d.gif'):
                     writer.append_data(image)
             for fname in frame_files:
                 os.remove(fname)
-            print(f"GIF сохранён: {output_gif}")
+            print(f"GIF СЃРѕС…СЂР°РЅС‘РЅ: {output_gif}")
         except Exception as e:
-            print("Ошибка при создании GIF:")
+            print("РћС€РёР±РєР° РїСЂРё СЃРѕР·РґР°РЅРёРё GIF:")
             traceback.print_exc()
     else:
-        print("Не создано ни одного кадра!")
+        print("РќРµ СЃРѕР·РґР°РЅРѕ РЅРё РѕРґРЅРѕРіРѕ РєР°РґСЂР°!")
 
 if __name__ == "__main__":
-    path = r'C:\solvver\GD_solver\output\steps'   # измените при необходимости
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    method_tag = load_method_tag(project_root)
+    path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "output", "steps"))   # РёР·РјРµРЅРёС‚Рµ РїСЂРё РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё
     if not os.path.exists(path):
-        print(f"Путь {path} не найден, ищем файлы в текущей директории...")
+        print(f"РџСѓС‚СЊ {path} РЅРµ РЅР°Р№РґРµРЅ, РёС‰РµРј С„Р°Р№Р»С‹ РІ С‚РµРєСѓС‰РµР№ РґРёСЂРµРєС‚РѕСЂРёРё...")
         filenames = glob.glob("step_*_time_*.csv")
     else:
         filenames = glob.glob(os.path.join(path, "step_*_time_*.csv"))
 
     if not filenames:
-        print("CSV-файлы не найдены!")
+        print("CSV-С„Р°Р№Р»С‹ РЅРµ РЅР°Р№РґРµРЅС‹!")
         exit()
 
-    print(f"Найдено {len(filenames)} файлов")
-    create_2d_animation(filenames, output_gif='animation_2d.gif')
+    print(f"РќР°Р№РґРµРЅРѕ {len(filenames)} С„Р°Р№Р»РѕРІ")
+    create_2d_animation(filenames, method_tag, output_gif='heatmap_2d.gif')
