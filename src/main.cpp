@@ -7,11 +7,13 @@
 #include <sstream>
 #include <cmath>
 #include <chrono>
+#include <limits>
 
 #include "./parser.h"
 #include "./utils.h"
 #include "./solver.h"
 #include "./flic.h"
+#include "./mader.h"
 #include "./point.h"
 #include "./grid.h"
 #include <script.h>
@@ -44,6 +46,18 @@ int main(int argc, char** argv) {
     int analytic_profile_index = -1;
     try { analytic_axis = sys.getString("analytic_axis"); } catch (...) {}
     try { analytic_profile_index = sys.getInt("analytic_profile_index"); } catch (...) {}
+    MaderConfig mader_config;
+    try { mader_config.visc = sys.getDouble("mader_visc"); } catch (...) {}
+    try { mader_config.inflow_rho = sys.getDouble("inflow_rho"); } catch (...) {}
+    try { mader_config.inflow_u = sys.getDouble("inflow_u"); } catch (...) {}
+    try { mader_config.inflow_v = sys.getDouble("inflow_v"); } catch (...) {}
+    try { mader_config.inflow_p = sys.getDouble("inflow_p"); } catch (...) {}
+    try {
+        std::string step_enabled = sys.getString("step_enabled");
+        mader_config.step_enabled = !(step_enabled == "0" || step_enabled == "false" || step_enabled == "False");
+    } catch (...) {}
+    try { mader_config.step_x_end = sys.getDouble("step_x_end"); } catch (...) {}
+    try { mader_config.step_y_end = sys.getDouble("step_y_end"); } catch (...) {}
     const int analytic_axis_code = (analytic_axis == "y" || analytic_axis == "Y") ? 1 : 0;
 
     double dx = (x_max - x_min) / Nx; 
@@ -58,6 +72,16 @@ int main(int argc, char** argv) {
     std::vector<std::vector<std::vector<double>>> u_next(Nx_with_fict_cells,  std::vector<std::vector<double>>(Ny_with_fict_cells, std::vector<double>(M)));
     parseAndInitialize(u_prev, system_ini, fict_x, fict_y, g);
     parseAndInitialize(u_next, system_ini, fict_x, fict_y, g);
+    Mask2D solid_mask(Nx_with_fict_cells, std::vector<unsigned char>(Ny_with_fict_cells, 0));
+    const std::vector<double> mader_fill_cons = noncons_to_cons(
+        std::vector<double>{mader_config.inflow_rho, mader_config.inflow_u, mader_config.inflow_v, mader_config.inflow_p}, g);
+    if (equation_type == 9) {
+        solid_mask = build_step_mask(x_min, y_min, dx, dy,
+                                     Nx_with_fict_cells, Ny_with_fict_cells,
+                                     fict_x, fict_y, mader_config);
+        apply_step_mask(u_prev, solid_mask, mader_fill_cons);
+        apply_step_mask(u_next, solid_mask, mader_fill_cons);
+    }
     const auto u_initial = u_prev;
     //set_sod_initial_conditions(u_prev, u_next, Nx, x_min, x_max, Ny, y_min, y_max,
       //                        rho_R, u_R, v_R, p_R, rho_L, u_L, v_L, p_L, g, fict_x, fict_y);
@@ -78,22 +102,55 @@ int main(int argc, char** argv) {
 
     std::string steps_dir = "../output/steps/";
     std::filesystem::create_directories(steps_dir);
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    auto write_state_csv = [&](const std::string& path,
+                               const auto& field,
+                               double time,
+                               bool with_exact) {
+        std::vector<std::vector<std::vector<double>>> analytic_solution;
+        if (with_exact) {
+            analytic_solution = compute_analytic_solution_2d(
+                x_min, x_max, y_min, y_max, Nx, Ny, fict_x, fict_y,
+                time, u_initial, analytic_axis_code, analytic_profile_index, g
+            );
+        }
+
+        std::ofstream fout(path);
+        fout << "x,y,rho,u,v,p,rho_exact,u_exact,v_exact,p_exact,is_solid\n";
+        for (int i = fict_x; i < Nx_with_fict_cells - fict_x; ++i) {
+            const double x = x_min + (i - fict_x + 0.5) * dx;
+            for (int j = fict_y; j < Ny_with_fict_cells - fict_y; ++j) {
+                const double y = y_min + (j - fict_y + 0.5) * dy;
+                const bool is_solid = solid_mask[i][j] != 0;
+
+                if (is_solid) {
+                    fout << x << "," << y << "," << nan << "," << nan << "," << nan << "," << nan << ","
+                         << nan << "," << nan << "," << nan << "," << nan << ",1\n";
+                    continue;
+                }
+
+                const std::vector<double> prim = cons_to_noncons(field[i][j], g);
+                double rho_exact = nan;
+                double u_exact = nan;
+                double v_exact = nan;
+                double p_exact = nan;
+
+                if (with_exact) {
+                    const std::vector<double>& prim_exact = analytic_solution[i][j];
+                    rho_exact = prim_exact[0];
+                    u_exact = prim_exact[1];
+                    v_exact = prim_exact[2];
+                    p_exact = prim_exact[3];
+                }
+
+                fout << x << "," << y << "," << prim[RHO] << "," << prim[U] << "," << prim[V] << "," << prim[P] << ","
+                     << rho_exact << "," << u_exact << "," << v_exact << "," << p_exact << ",0\n";
+            }
+        }
+    };
 
     // сохранение начальных условий
-    std::ofstream fout_initial(steps_dir + "step_0_initial.csv");
-    fout_initial << "x,y,rho,u,v,p\n";
-    for(int i = fict_x; i < Nx_with_fict_cells - fict_x; i++) 
-    {
-        double x = x_min + (i - fict_x + 0.5) * dx;
-        for( int j = fict_y; j < Ny_with_fict_cells - fict_y; j++)
-        {
-            
-            double y = y_min + (j - fict_y + 0.5) * dy;
-            std::vector<double> prim = cons_to_noncons(u_prev[i][j], g);
-            fout_initial << x << "," << y << "," << prim[RHO] << "," << prim[U] << "," << prim[V] << "," << prim[P] << "\n";
-        }
-    }
-    fout_initial.close();
+    write_state_csv(steps_dir + "step_0_initial.csv", u_prev, 0.0, equation_type != 9);
 
     // основной цикл по времени
     double curr_time = 0;
@@ -121,22 +178,26 @@ int main(int argc, char** argv) {
     while(curr_time < tmax) {
         // 1. Установка граничных условий на текущем слое
         // 1. Граничные условия (Ghost Cells)
-        // Лево/Право
-        for(int j = 0; j < Ny_with_fict_cells; ++j) {
-            for(int k = 0; k < fict_x; ++k) {
-                u_prev[k][j] = boundary(u_prev[fict_x][j], left_bc_code, g, 0); // Axis 0 (X)
-                u_prev[Nx_with_fict_cells - 1 - k][j] = boundary(u_prev[Nx_with_fict_cells - fict_x - 1][j], right_bc_code , g, 0);
+        if (equation_type != 9) {
+            // Лево/Право
+            for(int j = 0; j < Ny_with_fict_cells; ++j) {
+                for(int k = 0; k < fict_x; ++k) {
+                    u_prev[k][j] = boundary(u_prev[fict_x][j], left_bc_code, g, 0); // Axis 0 (X)
+                    u_prev[Nx_with_fict_cells - 1 - k][j] = boundary(u_prev[Nx_with_fict_cells - fict_x - 1][j], right_bc_code , g, 0);
+                }
             }
-        }
-        // Верх/Низ
-        for(int i = 0; i < Nx_with_fict_cells; ++i) {
-            for(int k = 0; k < fict_y; ++k) {
-                u_prev[i][k] = boundary(u_prev[i][fict_y], down_bc_code , g, 1); // Axis 1 (Y)
-                u_prev[i][Ny_with_fict_cells - 1 - k] = boundary(u_prev[i][Ny_with_fict_cells - fict_y - 1], up_bc_code , g, 1);
+            // Верх/Низ
+            for(int i = 0; i < Nx_with_fict_cells; ++i) {
+                for(int k = 0; k < fict_y; ++k) {
+                    u_prev[i][k] = boundary(u_prev[i][fict_y], down_bc_code , g, 1); // Axis 1 (Y)
+                    u_prev[i][Ny_with_fict_cells - 1 - k] = boundary(u_prev[i][Ny_with_fict_cells - fict_y - 1], up_bc_code , g, 1);
+                }
             }
         }
 
-        double dt = calc_time_step(u_prev, dx, dy, cfl, g, fict_x);
+        double dt = (equation_type == 9)
+            ? calc_time_step_masked(u_prev, solid_mask, dx, dy, cfl, g, fict_x, fict_y)
+            : calc_time_step(u_prev, dx, dy, cfl, g, fict_x);
         if ((curr_time + dt) > tmax){
             dt = tmax - curr_time; // Исправлена логика обрезки шага
         }
@@ -249,6 +310,10 @@ int main(int argc, char** argv) {
             flic_step_2d(u_prev, u_next, dt, dx, dy, g,
                          Nx_with_fict_cells, Ny_with_fict_cells, fict_x, fict_y,
                          left_bc_code, right_bc_code, up_bc_code, down_bc_code);
+        } else if (equation_type == 9) { // Mader 2DE
+            mader_step_2d(u_prev, u_next, dt, dx, dy, g,
+                          Nx_with_fict_cells, Ny_with_fict_cells, fict_x, fict_y,
+                          solid_mask, mader_config);
         } else {
             // --- ОСНОВНОЙ ЦИКЛ ПО ЯЧЕЙКАМ (Расчет потоков и обновление) ---
             for(int i = fict_x; i < Nx_with_fict_cells - fict_x; ++i) {
@@ -339,29 +404,7 @@ int main(int argc, char** argv) {
             std::cout << "Step: " << step << ", Time: " << curr_time << ", dt: " << dt << std::endl;
             std::ostringstream filename;
             filename << steps_dir << "step_" << step << "_time_" << std::fixed << std::setprecision(6) << curr_time << ".csv";
-            
-            // Аналитическое решение
-            auto analytic_solution = compute_analytic_solution_2d(
-                x_min, x_max, y_min, y_max, Nx, Ny, fict_x, fict_y,
-                curr_time, u_initial, analytic_axis_code, analytic_profile_index, g
-            );
-            
-            std::ofstream fout_step(filename.str());
-            fout_step << "x,y,rho,u,v,p,rho_exact,u_exact,v_exact,p_exact\n";
-            for(int i = fict_x; i < Nx_with_fict_cells - fict_x; i++) {
-                double x = x_min + (i - fict_x + 0.5) * dx;
-                for(int j = fict_y; j < Ny_with_fict_cells - fict_y; j++)
-                {
-                    
-                    double y = y_min + (j - fict_y + 0.5) * dy;
-                    std::vector<double> prim = cons_to_noncons(u_prev[i][j], g);
-                    std::vector<double> prim_exact = analytic_solution[i][j];
-                
-                    fout_step << x << "," << y << "," << prim[RHO] << "," << prim[U] << "," << prim[V] << "," <<prim[P] << ","
-                         << prim_exact[0] << "," << prim_exact[1] << "," << prim_exact[2] << "," << prim_exact[3] <<"\n";
-                }
-            }
-            fout_step.close();
+            write_state_csv(filename.str(), u_prev, curr_time, equation_type != 9);
         }
     }
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -371,25 +414,7 @@ int main(int argc, char** argv) {
     std::string output_dir = "../output/steps/";
     std::filesystem::create_directories(output_dir);
     
-    auto analytic_final = compute_analytic_solution_2d(
-    x_min, x_max, y_min, y_max, Nx, Ny, fict_x, fict_y,
-    curr_time, u_initial, analytic_axis_code, analytic_profile_index, g);
-    
-    std::ofstream fout(output_dir + "final_results.csv");
-    fout << "x,y,rho,u,v,p,rho_exact,u_exact,v_exact,p_exact\n";
-    for(int i = fict_x; i < Nx_with_fict_cells - fict_x; i++) {
-        double x = x_min + (i - fict_x + 0.5) * dx;
-        for(int j = fict_y; j < Ny_with_fict_cells - fict_y; j++){
-            
-            double y = y_min + (j - fict_y + 0.5) * dy;
-            std::vector<double> prim = cons_to_noncons(u_prev[i][j], g);
-            std::vector<double> prim_exact = analytic_final[i][j];
-        
-            fout << x << "," << y << "," << prim[RHO] << "," << prim[U] << "," << prim[V] << "," << prim[P] << ","
-                 << prim_exact[0] << "," << prim_exact[1] << "," << prim_exact[2] << "," << prim_exact[3] <<"\n";
-        }
-    }
-    fout.close();
+    write_state_csv(output_dir + "final_results.csv", u_prev, curr_time, equation_type != 9);
 
     std::cout << "Calculation completed! Final time: " << curr_time << std::endl;
 

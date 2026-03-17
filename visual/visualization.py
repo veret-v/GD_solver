@@ -21,6 +21,7 @@ METHOD_NAMES = {
     6: "Osher",
     7: "Roe",
     8: "FLIC",
+    9: "Mader2DE",
 }
 
 
@@ -79,6 +80,9 @@ def extract_time(path: Path):
 
 
 def select_1d_slice(df, axis, profile_index):
+    if "is_solid" in df.columns:
+        df = df[df["is_solid"] < 0.5].copy()
+
     if axis == "x":
         y_vals = np.sort(df["y"].unique())
         idx = len(y_vals) // 4 if profile_index < 0 else clamp(profile_index, 0, len(y_vals) - 1)
@@ -116,10 +120,13 @@ def create_animation_1d(step_files, axis, profile_index, gamma, method_tag, outp
 
     for idx, (t, path) in enumerate(times):
         df = pd.read_csv(path)
-        required = ["x", "y", "u", "rho", "p", "u_exact", "rho_exact", "p_exact"]
+        required = ["x", "y", "u", "rho", "p"]
         if not all(col in df.columns for col in required):
             print(f"Пропуск t={t}: не хватает колонок для 1D профиля")
             continue
+        has_exact = all(col in df.columns for col in ["u_exact", "rho_exact", "p_exact"])
+        if has_exact:
+            has_exact = np.isfinite(df[["u_exact", "rho_exact", "p_exact"]].to_numpy(dtype=float)).any()
 
         sl, coord, fixed_name, fixed_value = select_1d_slice(df, axis, profile_index)
         if sl.empty:
@@ -128,37 +135,42 @@ def create_animation_1d(step_files, axis, profile_index, gamma, method_tag, outp
 
         coord_vals = sl[coord].to_numpy()
         u_num = sl["u"].to_numpy()
-        u_ex = sl["u_exact"].to_numpy()
         rho_num = sl["rho"].to_numpy()
-        rho_ex = sl["rho_exact"].to_numpy()
         p_num = sl["p"].to_numpy()
-        p_ex = sl["p_exact"].to_numpy()
         e_num = p_num / ((gamma - 1.0) * rho_num)
-        e_ex = p_ex / ((gamma - 1.0) * rho_ex)
+        if has_exact:
+            u_ex = sl["u_exact"].to_numpy()
+            rho_ex = sl["rho_exact"].to_numpy()
+            p_ex = sl["p_exact"].to_numpy()
+            e_ex = p_ex / ((gamma - 1.0) * rho_ex)
 
         fig, axs = plt.subplots(4, 1, figsize=(12, 12))
         fig.suptitle(f"Time: {t:.6f} s | {method_tag} | slice {coord} at {fixed_name}={fixed_value:.6f}")
 
         axs[0].plot(coord_vals, u_num, style_num, label="u numerical", linewidth=1.5)
-        axs[0].plot(coord_vals, u_ex, "-", label="u exact", linewidth=2)
+        if has_exact:
+            axs[0].plot(coord_vals, u_ex, "-", label="u exact", linewidth=2)
         axs[0].set_ylabel("Velocity")
         axs[0].grid(True, alpha=0.3)
         axs[0].legend()
 
         axs[1].plot(coord_vals, rho_num, style_num, label="rho numerical", linewidth=1.5)
-        axs[1].plot(coord_vals, rho_ex, "-", label="rho exact", linewidth=2)
+        if has_exact:
+            axs[1].plot(coord_vals, rho_ex, "-", label="rho exact", linewidth=2)
         axs[1].set_ylabel("Density")
         axs[1].grid(True, alpha=0.3)
         axs[1].legend()
 
         axs[2].plot(coord_vals, p_num, style_num, label="p numerical", linewidth=1.5)
-        axs[2].plot(coord_vals, p_ex, "-", label="p exact", linewidth=2)
+        if has_exact:
+            axs[2].plot(coord_vals, p_ex, "-", label="p exact", linewidth=2)
         axs[2].set_ylabel("Pressure")
         axs[2].grid(True, alpha=0.3)
         axs[2].legend()
 
         axs[3].plot(coord_vals, e_num, style_num, label="e numerical", linewidth=1.5)
-        axs[3].plot(coord_vals, e_ex, "-", label="e exact", linewidth=2)
+        if has_exact:
+            axs[3].plot(coord_vals, e_ex, "-", label="e exact", linewidth=2)
         axs[3].set_ylabel("Internal energy")
         axs[3].set_xlabel(coord)
         axs[3].grid(True, alpha=0.3)

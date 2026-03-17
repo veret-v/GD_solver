@@ -29,7 +29,7 @@ def load_method_tag(project_root):
                         pass
     method_names = {
         0: "Godunov", 1: "Kolgan", 2: "Rodionov", 3: "HLL",
-        4: "HLLC", 5: "Rusanov", 6: "Osher", 7: "Roe", 8: "FLIC",
+        4: "HLLC", 5: "Rusanov", 6: "Osher", 7: "Roe", 8: "FLIC", 9: "Mader2DE",
     }
     return f"eq={equation_type} ({method_names.get(equation_type, 'Unknown')})"
 
@@ -80,21 +80,23 @@ def create_animation_2D(filenames, method_tag, output_gif='profile_2d.gif', gamm
 
         # Преобразуем табличные данные в 2D-массивы для каждой величины
         try:
-            rho_num = df.pivot(index='y', columns='x', values='rho').values
-            rho_ex = df.pivot(index='y', columns='x', values='rho_exact').values
-            p_num = df.pivot(index='y', columns='x', values='p').values
-            p_ex = df.pivot(index='y', columns='x', values='p_exact').values
-            u_num = df.pivot(index='y', columns='x', values='u').values
-            u_ex = df.pivot(index='y', columns='x', values='u_exact').values
-            v_num = df.pivot(index='y', columns='x', values='v').values
-            v_ex = df.pivot(index='y', columns='x', values='v_exact').values
+            rho_num = df.pivot(index='y', columns='x', values='rho').values.astype(float)
+            p_num = df.pivot(index='y', columns='x', values='p').values.astype(float)
+            u_num = df.pivot(index='y', columns='x', values='u').values.astype(float)
+            v_num = df.pivot(index='y', columns='x', values='v').values.astype(float)
         except KeyError as e:
             print(f"Ошибка: в файле для времени {t} отсутствует столбец {e}")
             continue
 
+        if 'is_solid' in df.columns:
+            solid_mask = df.pivot(index='y', columns='x', values='is_solid').values > 0.5
+            rho_num = np.ma.array(rho_num, mask=solid_mask | ~np.isfinite(rho_num))
+            p_num = np.ma.array(p_num, mask=solid_mask | ~np.isfinite(p_num))
+            u_num = np.ma.array(u_num, mask=solid_mask | ~np.isfinite(u_num))
+            v_num = np.ma.array(v_num, mask=solid_mask | ~np.isfinite(v_num))
+
         # Вычисляем внутреннюю энергию
         e_num = p_num / ((gamma - 1) * rho_num)
-        e_ex = p_ex / ((gamma - 1) * rho_ex)
 
         # Создаём сетку для отрисовки (матрицы x и y)
         X, Y = np.meshgrid(x_vals, y_vals)
@@ -106,13 +108,13 @@ def create_animation_2D(filenames, method_tag, output_gif='profile_2d.gif', gamm
         # Настройка пределов для цветовых шкал (можно брать глобальные min/max по всем временам)
         # Для простоты используем локальные min/max каждого кадра
         plots = [
-            (rho_num, rho_ex, r'Плотность $\rho$', axs[0, 0]),
-            (p_num,   p_ex,   r'Давление $p$',      axs[0, 1]),
-            (u_num,   u_ex,   r'Скорость $u$',      axs[1, 0]),
-            (v_num,   v_ex,   r'Скорость $v$',      axs[1, 1])
+            (rho_num, r'Плотность $\rho$', axs[0, 0]),
+            (p_num,   r'Давление $p$',      axs[0, 1]),
+            (u_num,   r'Скорость $u$',      axs[1, 0]),
+            (v_num,   r'Скорость $v$',      axs[1, 1])
         ]
 
-        for num, ex, title, ax in plots:
+        for num, title, ax in plots:
             # Рисуем численное решение (заливка)
             im = ax.pcolormesh(X, Y, num, shading='auto', cmap='viridis')
             # Можно добавить контуры точного решения (опционально)

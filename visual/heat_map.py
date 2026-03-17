@@ -31,9 +31,32 @@ def load_method_tag(project_root):
                         pass
     method_names = {
         0: "Godunov", 1: "Kolgan", 2: "Rodionov", 3: "HLL",
-        4: "HLLC", 5: "Rusanov", 6: "Osher", 7: "Roe", 8: "FLIC",
+        4: "HLLC", 5: "Rusanov", 6: "Osher", 7: "Roe", 8: "FLIC", 9: "Mader2DE",
     }
     return f"eq={equation_type} ({method_names.get(equation_type, 'Unknown')})"
+
+
+def has_valid_exact(df):
+    exact_cols = ["rho_exact", "u_exact", "v_exact", "p_exact"]
+    if not all(col in df.columns for col in exact_cols):
+        return False
+    return np.isfinite(df[exact_cols].to_numpy(dtype=float)).any()
+
+
+def build_mask(df, x_vals, y_vals):
+    if 'is_solid' not in df.columns:
+        return np.zeros((len(y_vals), len(x_vals)), dtype=bool)
+    pivot = df.pivot(index='y', columns='x', values='is_solid')
+    pivot = pivot.reindex(index=y_vals, columns=x_vals)
+    return pivot.values > 0.5
+
+
+def get_2d(df, x_vals, y_vals, var, solid_mask):
+    pivot = df.pivot(index='y', columns='x', values=var)
+    pivot = pivot.reindex(index=y_vals, columns=x_vals)
+    arr = pivot.values.astype(float)
+    mask = solid_mask | ~np.isfinite(arr)
+    return np.ma.array(arr, mask=mask)
 
 
 def create_2d_animation(filenames, method_tag, output_gif='heatmap_2d.gif'):
@@ -67,79 +90,84 @@ def create_2d_animation(filenames, method_tag, output_gif='heatmap_2d.gif'):
             x_vals = np.sort(df['x'].unique())
             y_vals = np.sort(df['y'].unique())
             X, Y = np.meshgrid(x_vals, y_vals)
-
-            def get_2d(var):
-                pivot = df.pivot(index='y', columns='x', values=var)
-                pivot = pivot.reindex(index=y_vals, columns=x_vals)
-                return pivot.values
+            solid_mask = build_mask(df, x_vals, y_vals)
 
             # Загружаем данные
-            rho = get_2d('rho')
-            rho_ex = get_2d('rho_exact')
-            u = get_2d('u')
-            u_ex = get_2d('u_exact')
-            v = get_2d('v')
-            v_ex = get_2d('v_exact')
-            p = get_2d('p')
-            p_ex = get_2d('p_exact')
-
-            # Проверка на наличие нечисловых значений
-            for name, arr in [('rho', rho), ('rho_ex', rho_ex), ('u', u), ('u_ex', u_ex),
-                              ('v', v), ('v_ex', v_ex), ('p', p), ('p_ex', p_ex)]:
-                if not np.all(np.isfinite(arr)):
-                    print(f"Кадр {i} (время {t}): массив {name} содержит нечисловые значения, пропускаем")
-                    raise ValueError("Non-finite data")
+            rho = get_2d(df, x_vals, y_vals, 'rho', solid_mask)
+            u = get_2d(df, x_vals, y_vals, 'u', solid_mask)
+            v = get_2d(df, x_vals, y_vals, 'v', solid_mask)
+            p = get_2d(df, x_vals, y_vals, 'p', solid_mask)
+            exact_available = has_valid_exact(df)
+            if exact_available:
+                rho_ex = get_2d(df, x_vals, y_vals, 'rho_exact', solid_mask)
+                u_ex = get_2d(df, x_vals, y_vals, 'u_exact', solid_mask)
+                v_ex = get_2d(df, x_vals, y_vals, 'v_exact', solid_mask)
+                p_ex = get_2d(df, x_vals, y_vals, 'p_exact', solid_mask)
 
             gamma = 1.4
             e = p / (rho * (gamma - 1))
-            e_ex = p_ex / (rho_ex * (gamma - 1))
-            if not (np.all(np.isfinite(e)) and np.all(np.isfinite(e_ex))):
-                print(f"Кадр {i}: внутренняя энергия содержит inf/nan, пропускаем")
-                raise ValueError("Non-finite internal energy")
+            if exact_available:
+                e_ex = p_ex / (rho_ex * (gamma - 1))
 
             # Создаём фигуру
-            fig, axs = plt.subplots(3, 2, figsize=(14, 18))
+            if exact_available:
+                fig, axs = plt.subplots(3, 2, figsize=(14, 18))
+            else:
+                fig, axs = plt.subplots(3, 1, figsize=(10, 18))
             # Упрощённый заголовок (без форматирования, чтобы избежать возможной проблемы)
             fig.suptitle(f'Time: {t} s | {method_tag}', fontsize=16)
 
-            # Плотность
-            vmin_rho = min(rho.min(), rho_ex.min())
-            vmax_rho = max(rho.max(), rho_ex.max())
-            im1 = axs[0,0].pcolormesh(X, Y, rho, shading='auto', norm=Normalize(vmin_rho, vmax_rho), cmap='viridis')
-            axs[0,0].set_title('Density (numerical)')
-            axs[0,0].set_xlabel('x'); axs[0,0].set_ylabel('y')
-            plt.colorbar(im1, ax=axs[0,0])
+            if exact_available:
+                # Плотность
+                vmin_rho = float(min(np.ma.min(rho), np.ma.min(rho_ex)))
+                vmax_rho = float(max(np.ma.max(rho), np.ma.max(rho_ex)))
+                im1 = axs[0,0].pcolormesh(X, Y, rho, shading='auto', norm=Normalize(vmin_rho, vmax_rho), cmap='viridis')
+                axs[0,0].set_title('Density (numerical)')
+                axs[0,0].set_xlabel('x'); axs[0,0].set_ylabel('y')
+                plt.colorbar(im1, ax=axs[0,0])
 
-            im2 = axs[0,1].pcolormesh(X, Y, rho_ex, shading='auto', norm=Normalize(vmin_rho, vmax_rho), cmap='viridis')
-            axs[0,1].set_title('Density (exact)')
-            axs[0,1].set_xlabel('x'); axs[0,1].set_ylabel('y')
-            plt.colorbar(im2, ax=axs[0,1])
+                im2 = axs[0,1].pcolormesh(X, Y, rho_ex, shading='auto', norm=Normalize(vmin_rho, vmax_rho), cmap='viridis')
+                axs[0,1].set_title('Density (exact)')
+                axs[0,1].set_xlabel('x'); axs[0,1].set_ylabel('y')
+                plt.colorbar(im2, ax=axs[0,1])
 
-            # x-скорость
-            vmin_u = min(u.min(), u_ex.min())
-            vmax_u = max(u.max(), u_ex.max())
-            im3 = axs[1,0].pcolormesh(X, Y, u, shading='auto', norm=Normalize(vmin_u, vmax_u), cmap='plasma')
-            axs[1,0].set_title('u-velocity (numerical)')
-            axs[1,0].set_xlabel('x'); axs[1,0].set_ylabel('y')
-            plt.colorbar(im3, ax=axs[1,0])
+                # x-скорость
+                vmin_u = float(min(np.ma.min(u), np.ma.min(u_ex)))
+                vmax_u = float(max(np.ma.max(u), np.ma.max(u_ex)))
+                im3 = axs[1,0].pcolormesh(X, Y, u, shading='auto', norm=Normalize(vmin_u, vmax_u), cmap='plasma')
+                axs[1,0].set_title('u-velocity (numerical)')
+                axs[1,0].set_xlabel('x'); axs[1,0].set_ylabel('y')
+                plt.colorbar(im3, ax=axs[1,0])
 
-            im4 = axs[1,1].pcolormesh(X, Y, u_ex, shading='auto', norm=Normalize(vmin_u, vmax_u), cmap='plasma')
-            axs[1,1].set_title('u-velocity (exact)')
-            axs[1,1].set_xlabel('x'); axs[1,1].set_ylabel('y')
-            plt.colorbar(im4, ax=axs[1,1])
+                im4 = axs[1,1].pcolormesh(X, Y, u_ex, shading='auto', norm=Normalize(vmin_u, vmax_u), cmap='plasma')
+                axs[1,1].set_title('u-velocity (exact)')
+                axs[1,1].set_xlabel('x'); axs[1,1].set_ylabel('y')
+                plt.colorbar(im4, ax=axs[1,1])
 
-            # Внутренняя энергия
-            vmin_e = min(e.min(), e_ex.min())
-            vmax_e = max(e.max(), e_ex.max())
-            im5 = axs[2,0].pcolormesh(X, Y, e, shading='auto', norm=Normalize(vmin_e, vmax_e), cmap='inferno')
-            axs[2,0].set_title('Internal energy (numerical)')
-            axs[2,0].set_xlabel('x'); axs[2,0].set_ylabel('y')
-            plt.colorbar(im5, ax=axs[2,0])
+                # Внутренняя энергия
+                vmin_e = float(min(np.ma.min(e), np.ma.min(e_ex)))
+                vmax_e = float(max(np.ma.max(e), np.ma.max(e_ex)))
+                im5 = axs[2,0].pcolormesh(X, Y, e, shading='auto', norm=Normalize(vmin_e, vmax_e), cmap='inferno')
+                axs[2,0].set_title('Internal energy (numerical)')
+                axs[2,0].set_xlabel('x'); axs[2,0].set_ylabel('y')
+                plt.colorbar(im5, ax=axs[2,0])
 
-            im6 = axs[2,1].pcolormesh(X, Y, e_ex, shading='auto', norm=Normalize(vmin_e, vmax_e), cmap='inferno')
-            axs[2,1].set_title('Internal energy (exact)')
-            axs[2,1].set_xlabel('x'); axs[2,1].set_ylabel('y')
-            plt.colorbar(im6, ax=axs[2,1])
+                im6 = axs[2,1].pcolormesh(X, Y, e_ex, shading='auto', norm=Normalize(vmin_e, vmax_e), cmap='inferno')
+                axs[2,1].set_title('Internal energy (exact)')
+                axs[2,1].set_xlabel('x'); axs[2,1].set_ylabel('y')
+                plt.colorbar(im6, ax=axs[2,1])
+            else:
+                fields = [
+                    (rho, 'Density (numerical)', 'viridis'),
+                    (u, 'u-velocity (numerical)', 'plasma'),
+                    (e, 'Internal energy (numerical)', 'inferno'),
+                ]
+                for ax, (arr, title, cmap) in zip(axs, fields):
+                    im = ax.pcolormesh(X, Y, arr, shading='auto', cmap=cmap)
+                    ax.set_title(title)
+                    ax.set_xlabel('x')
+                    ax.set_ylabel('y')
+                    plt.colorbar(im, ax=ax)
 
             plt.tight_layout()
             frame_name = f'frame_2d_{i:03d}.png'

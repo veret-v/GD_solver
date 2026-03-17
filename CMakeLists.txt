@@ -12,6 +12,7 @@ add_executable(${PROJECT_NAME}
     src/grid.cpp
     src/solver.cpp
     src/flic.cpp
+    src/mader.cpp
     src/script.cpp
 )
 
