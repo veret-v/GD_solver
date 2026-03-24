@@ -5,7 +5,7 @@
 #include <array>
 #include "./grid.h"
 #include "grid.h"
-
+#include <mpi.h>
 
 
 
@@ -158,4 +158,16 @@ std::vector<double> osher_flux_2d(const std::vector<double>& left_cons,
 std::vector<double> roe_flux_2d(const std::vector<double>& left_cons, 
                                const std::vector<double>& right_cons, 
                                double g, int axis);
+
+void get_subdomain_bounds(int N, int P, int rank, int& start, int& end);
+void exchange_halos_global(std::vector<std::vector<std::vector<double>>>& u,
+                           MPI_Comm cart_comm, int fict_x, int fict_y,
+                           int i_start, int i_end, int j_start, int j_end,
+                           int left_rank, int right_rank, int down_rank, int up_rank);
+
+
+void gather_to_root(std::vector<std::vector<std::vector<double>>>& u, 
+                    int Nx, int Ny, int fict_x, int fict_y,
+                    int i_start, int i_end, int j_start, int j_end,
+                    int rank, int size, MPI_Comm cart_comm, int* dims);
 #endif

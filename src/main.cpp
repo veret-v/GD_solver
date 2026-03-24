@@ -7,16 +7,19 @@
 #include <sstream>
 #include <cmath>
 #include <chrono>
-
 #include "./parser.h"
 #include "./utils.h"
 #include "./solver.h"
 #include "./point.h"
 #include "./grid.h"
 #include <script.h>
-
+#include <mpi.h>
 int main(int argc, char** argv) {
 // Изменено на единый файл input.ini
+    MPI_Init(&argc, &argv);
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
     std::string system_ini = "../configs/input.ini";
     std::string cases_ini = "../configs/SODA.ini";
 
@@ -36,6 +39,8 @@ int main(int argc, char** argv) {
     double g = sys.getDouble("g");
     double dt_out = sys.getDouble("dt_out");
     int step_num = sys.getInt("step_num");
+    int px = sys.getInt("px");
+    int py = sys.getInt("py");
     std::string boundary_type_left = sys.getString("boundary_type_left");
     std::string boundary_type_right = sys.getString("boundary_type_right");
     std::string boundary_type_up = sys.getString("boundary_type_up");
@@ -52,6 +57,32 @@ int main(int argc, char** argv) {
     double v_R = cases.getDouble(case_name, "v_R");
     double p_R = cases.getDouble(case_name, "p_R");
 
+    int dims[2] = {px, py};
+    MPI_Dims_create(size, 2, dims); // dims[0] - по X, dims[1] - по Y
+
+    int periods[2] = {0, 0};
+    MPI_Comm cart_comm;
+    MPI_Cart_create(MPI_COMM_WORLD, 2, dims, periods, 0, &cart_comm);
+    int coords[2];
+    MPI_Cart_coords(cart_comm, rank, 2, coords);
+
+    int left_rank, right_rank, down_rank, up_rank;
+    MPI_Cart_shift(cart_comm, 0, 1, &left_rank, &right_rank);
+    MPI_Cart_shift(cart_comm, 1, 1, &down_rank, &up_rank);
+
+    // 2. Вычисление РАБОЧИХ границ для текущего процесса в глобальных координатах
+    int i_start_phys, i_end_phys;
+    int j_start_phys, j_end_phys;
+
+    get_subdomain_bounds(Nx, dims[0], coords[0], i_start_phys, i_end_phys);
+    get_subdomain_bounds(Ny, dims[1], coords[1], j_start_phys, j_end_phys);
+    
+    // Сдвигаем индексы на размер фиктивных ячеек
+    int i_start = i_start_phys + fict_x;
+    int i_end   = i_end_phys + fict_x;
+    int j_start = j_start_phys + fict_y;
+    int j_end   = j_end_phys + fict_y;
+    
     double dx = (x_max - x_min) / Nx; 
     double dy = (y_max - y_min) / Ny;
     int Nx_with_fict_cells = Nx + 2 * fict_x;
@@ -82,23 +113,26 @@ int main(int argc, char** argv) {
     const int down_bc_code = parse_boundary_code(boundary_type_down);
 
     std::string steps_dir = "../output/steps/";
-    std::filesystem::create_directories(steps_dir);
-
-    // сохранение начальных условий
-    std::ofstream fout_initial(steps_dir + "step_0_initial.csv");
-    fout_initial << "x,y,rho,u,v,p\n";
-    for(int i = fict_x; i < Nx_with_fict_cells - fict_x; i++) 
-    {
-        double x = x_min + (i - fict_x + 0.5) * dx;
-        for( int j = fict_y; j < Ny_with_fict_cells - fict_y; j++)
-        {
-            
-            double y = y_min + (j - fict_y + 0.5) * dy;
-            std::vector<double> prim = cons_to_noncons(u_prev[i][j], g);
-            fout_initial << x << "," << y << "," << prim[RHO] << "," << prim[U] << "," << prim[V] << "," << prim[P] << "\n";
-        }
+ if (rank == 0) {
+        std::filesystem::create_directories(steps_dir);
     }
-    fout_initial.close();
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    // Сборка и сохранение начальных условий
+    gather_to_root(u_prev, Nx, Ny, fict_x, fict_y, i_start, i_end, j_start, j_end, rank, size, cart_comm, dims);
+    if (rank == 0) {
+        std::ofstream fout_initial(steps_dir + "step_0_initial.csv");
+        fout_initial << "x,y,rho,u,v,p\n";
+        for(int i = fict_x; i < Nx_with_fict_cells - fict_x; i++) {
+            double x = x_min + (i - fict_x + 0.5) * dx;
+            for(int j = fict_y; j < Ny_with_fict_cells - fict_y; j++) {
+                double y = y_min + (j - fict_y + 0.5) * dy;
+                std::vector<double> prim = cons_to_noncons(u_prev[i][j], g);
+                fout_initial << x << "," << y << "," << prim[RHO] << "," << prim[U] << "," << prim[V] << "," << prim[P] << "\n";
+            }
+        }
+        fout_initial.close();
+    }
 
     // основной цикл по времени
     double curr_time = 0;
@@ -124,6 +158,10 @@ int main(int argc, char** argv) {
     std::vector<std::vector<std::vector<double>>> u_half(Nx_with_fict_cells, std::vector<std::vector<double>>(Ny_with_fict_cells, std::vector<double>(M)));
     auto start = std::chrono::high_resolution_clock::now();
     while(curr_time < tmax) {
+
+
+        exchange_halos_global(u_prev, cart_comm, fict_x, fict_y, i_start, i_end, j_start, j_end, left_rank, right_rank, down_rank, up_rank);
+        /*
         // 1. Установка граничных условий на текущем слое
         // 1. Граничные условия (Ghost Cells)
         // Лево/Право
@@ -145,15 +183,58 @@ int main(int argc, char** argv) {
         if ((curr_time + dt) > tmax){
             dt = tmax - curr_time; // Исправлена логика обрезки шага
         }
+        */
+
+        // 2. Физические граничные условия (применяются только если нет соседа)
+        if (left_rank == MPI_PROC_NULL) {
+            for(int j = std::max(0, j_start - 1); j <= std::min(Ny_with_fict_cells - 1, j_end); ++j)
+                for(int k = 0; k < fict_x; ++k)
+                    u_prev[k][j] = boundary(u_prev[fict_x][j], left_bc_code, g, 0); 
+        }
+        if (right_rank == MPI_PROC_NULL) {
+            for(int j = std::max(0, j_start - 1); j <= std::min(Ny_with_fict_cells - 1, j_end); ++j)
+                for(int k = 0; k < fict_x; ++k)
+                    u_prev[Nx_with_fict_cells - 1 - k][j] = boundary(u_prev[Nx_with_fict_cells - fict_x - 1][j], right_bc_code , g, 0);
+        }
+        if (up_rank == MPI_PROC_NULL) {
+            for(int i = std::max(0, i_start - 1); i <= std::min(Nx_with_fict_cells - 1, i_end); ++i)
+                for(int k = 0; k < fict_y; ++k)
+                    u_prev[i][Ny_with_fict_cells - 1 - k] = boundary(u_prev[i][Ny_with_fict_cells - fict_y - 1], up_bc_code, g, 1);
+        }
+        if (down_rank == MPI_PROC_NULL) {
+            for(int i = std::max(0, i_start - 1); i <= std::min(Nx_with_fict_cells - 1, i_end); ++i)
+                for(int k = 0; k < fict_y; ++k)
+                    u_prev[i][k] = boundary(u_prev[i][fict_y], down_bc_code, g, 1);
+        }
+        // 3. Синхронизация шага по времени
+        double local_dt = 1e10; // Вычисляем ТОЛЬКО по своему поддомену
+        for(int i = i_start; i < i_end; ++i) {
+            for(int j = j_start; j < j_end; ++j) {
+                auto prim = cons_to_noncons(u_prev[i][j], g);
+                double c = calc_sound_speed(prim, g);
+                double sig_x = std::abs(prim[U]) + c;
+                double sig_y = std::abs(prim[V]) + c;
+                double inv_dt = (sig_x / dx) + (sig_y / dy);
+                local_dt = std::min(local_dt, cfl / inv_dt);
+            }
+        }
+
+        double dt;
+        MPI_Allreduce(&local_dt, &dt, 1, MPI_DOUBLE, MPI_MIN, cart_comm);
         
         // --- ПРЕДВАРИТЕЛЬНЫЕ РАСЧЕТЫ (Вне цикла по ячейкам) ---
+        // Расширенные границы для реконструкции (чтобы получить грани для расчета потоков)
+        int rec_i_start = std::max(0, i_start - 1);
+        int rec_i_end   = std::min(Nx_with_fict_cells - 1, i_end);
+        int rec_j_start = std::max(0, j_start - 1);
+        int rec_j_end   = std::min(Ny_with_fict_cells - 1, j_end);
 
         // TYPE 1: KOLGAN (2D Extension)
         if(equation_type == 1) {
             // 1. Reconstruct along X (for each row j)
             
-            for(int j = 0; j < Ny_with_fict_cells; ++j) {
-                for(int i = 0; i < Nx_with_fict_cells ; ++i) {
+            for(int j = rec_j_start; j <= rec_j_end; ++j) {
+                for(int i = rec_i_start; i <= rec_i_end  ; ++i) {
                      if(i == 0) {
                         Kolgan(u_prev[i][j], u_prev[i][j], u_prev[i+1][j], left_face_x[i][j], right_face_x[i][j], g);
                     } 
@@ -169,8 +250,8 @@ int main(int argc, char** argv) {
                 }
             }
             // 2. Reconstruct along Y (for each column i)
-            for(int i = 0; i < Nx_with_fict_cells; ++i) {
-                for(int j = 0; j < Ny_with_fict_cells; ++j) {
+            for(int i = rec_i_start; i <= rec_i_end; ++i) {
+                for(int j = rec_j_start; j <= rec_j_end; ++j) {
                     if (j == 0){
                         Kolgan(u_prev[i][j], u_prev[i][j], u_prev[i][j+1], left_face_y[i][j], right_face_y[i][j], g);
                         }
@@ -189,8 +270,8 @@ int main(int argc, char** argv) {
         // TYPE 2: RODIONOV (2D Extension)
         if(equation_type == 2) {
             // 1. Расчет дельт (наклонов) по X
-            for(int j = 0; j < Ny_with_fict_cells; ++j) {
-                for(int i = 0; i < Nx_with_fict_cells; ++i) {
+            for(int j = rec_j_start; j <= rec_j_end; ++j) {
+                for(int i = rec_i_start; i <= rec_i_end; ++i) {
                     if(i == 0) {
                         Kolgan_for_Rodionov(u_prev[0][j], u_prev[0][j], u_prev[1][j], delta_x[i][j], g);
                     } 
@@ -205,8 +286,8 @@ int main(int argc, char** argv) {
                 }
             }
             // 2. Расчет дельт (наклонов) по Y
-            for(int i = 0; i < Nx_with_fict_cells; ++i) {
-                for(int j = 0; j < Ny_with_fict_cells; ++j) {
+            for(int i = rec_i_start; i <= rec_i_end; ++i) {
+                for(int j = rec_j_start; j <= rec_j_end; ++j) {
                     if(j == 0){
                         Kolgan_for_Rodionov(u_prev[i][0], u_prev[i][0], u_prev[i][1], delta_y[i][j], g);
                     }
@@ -227,8 +308,8 @@ int main(int argc, char** argv) {
                      left_bc_code, right_bc_code, up_bc_code, down_bc_code);
 
             // 4. Шаг Корректор: Реконструкция на гранях
-            for (int i = 0; i < Nx_with_fict_cells; i++) {
-                for (int j = 0; j < Ny_with_fict_cells; j++) {
+            for (int i = rec_i_start; i <= rec_i_end; i++) {
+                for (int j = rec_j_start; j <= rec_j_end; j++) {
                     for (int var = 0; var < M; var++) {
                         double u_avg = 0.5 * (u_prev[i][j][var] + u_half[i][j][var]);
                         
@@ -250,8 +331,8 @@ int main(int argc, char** argv) {
            
 
         // --- ОСНОВНОЙ ЦИКЛ ПО ЯЧЕЙКАМ (Расчет потоков и обновление) ---
-        for(int i = fict_x; i < Nx_with_fict_cells - fict_x; ++i) {
-            for(int j = fict_y; j < Ny_with_fict_cells - fict_y; ++j){
+        for(int i = i_start; i < i_end; ++i) {
+            for(int j = j_start; j < j_end; ++j){
             std::vector<double> left_flux(M), right_flux(M);
             std::vector<double> up_flux(M), down_flux(M);
 
@@ -317,85 +398,92 @@ int main(int argc, char** argv) {
             enforce_physical_state(u_next[i][j], g);
             }
         }
-            /*
-        // Установка граничных условий для нового слоя
-        for(int i = 0; i < fict_x; ++i) {
-            u_next[i] = boundary(u_next[fict_x], left_bc_code, g);
-            u_next[Nx_with_fict_cells - 1 - i] = boundary(u_next[Nx_with_fict_cells - fict_x - 1], right_bc_code, g);
-        }
-            */
+          
 
         std::swap(u_prev, u_next);
         curr_time += dt;
         step++;
+    
+    
+    
+    
+    
+    
 
-        // Вывод и сохранение
+
+// Вывод и сохранение с использованием MPI-сборки
         if(step % step_num == 0) {
-            std::cout << "Step: " << step << ", Time: " << curr_time << ", dt: " << dt << std::endl;
-            std::ostringstream filename;
-            filename << steps_dir << "step_" << step << "_time_" << std::fixed << std::setprecision(6) << curr_time << ".csv";
-            
-            // Аналитическое решение
-            std::vector<double> left_prim{rho_L, u_L, v_L, p_L};
-            std::vector<double> right_prim{rho_R, u_R, v_R, p_R};
-            auto analytic_solution = compute_analytic_solution_2d(x_min, x_max, y_min, y_max, Nx, Ny, fict_x, fict_y,
-                                                             curr_time, left_prim, right_prim, g);
-            
-            std::ofstream fout_step(filename.str());
-            fout_step << "x,y,rho,u,v,p,rho_exact,u_exact,v_exact,p_exact\n";
-            for(int i = fict_x; i < Nx_with_fict_cells - fict_x; i++) {
-                double x = x_min + (i - fict_x + 0.5) * dx;
-                for(int j = fict_y; j < Ny_with_fict_cells - fict_y; j++)
-                {
-                    
-                    double y = y_min + (j - fict_y + 0.5) * dy;
-                    std::vector<double> prim = cons_to_noncons(u_prev[i][j], g);
-                    std::vector<double> prim_exact = analytic_solution[i][j];
-                
-                    fout_step << x << "," << y << "," << prim[RHO] << "," << prim[U] << "," << prim[V] << "," <<prim[P] << ","
-                         << prim_exact[0] << "," << prim_exact[1] << "," << prim_exact[2] << "," << prim_exact[3] <<"\n";
-                }
+            if (rank == 0) {
+                std::cout << "Step: " << step << ", Time: " << curr_time << ", dt: " << dt << std::endl;
             }
-            fout_step.close();
+            
+            gather_to_root(u_prev, Nx, Ny, fict_x, fict_y, i_start, i_end, j_start, j_end, rank, size, cart_comm, dims);
+
+            if (rank == 0) {
+                std::ostringstream filename;
+                filename << steps_dir << "step_" << step << "_time_" << std::fixed << std::setprecision(6) << curr_time << ".csv";
+                
+                std::vector<double> left_prim{rho_L, u_L, v_L, p_L};
+                std::vector<double> right_prim{rho_R, u_R, v_R, p_R};
+                auto analytic_solution = compute_analytic_solution_2d(x_min, x_max, y_min, y_max, Nx, Ny, fict_x, fict_y,
+                                                                 curr_time, left_prim, right_prim, g);
+                
+                std::ofstream fout_step(filename.str());
+                fout_step << "x,y,rho,u,v,p,rho_exact,u_exact,v_exact,p_exact\n";
+                for(int i = fict_x; i < Nx_with_fict_cells - fict_x; i++) {
+                    double x = x_min + (i - fict_x + 0.5) * dx;
+                    for(int j = fict_y; j < Ny_with_fict_cells - fict_y; j++) {
+                        double y = y_min + (j - fict_y + 0.5) * dy;
+                        std::vector<double> prim = cons_to_noncons(u_prev[i][j], g);
+                        std::vector<double> prim_exact = analytic_solution[i][j];
+                    
+                        fout_step << x << "," << y << "," << prim[RHO] << "," << prim[U] << "," << prim[V] << "," <<prim[P] << ","
+                             << prim_exact[0] << "," << prim_exact[1] << "," << prim_exact[2] << "," << prim_exact[3] <<"\n";
+                    }
+                }
+                fout_step.close();
+            }
         }
     }
     auto end_time = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start);
     
-    // Сохранение финальных результатов
-    std::string output_dir = "../output/steps/";
-    std::filesystem::create_directories(output_dir);
+    // Сборка и сохранение финальных результатов
+    gather_to_root(u_prev, Nx, Ny, fict_x, fict_y, i_start, i_end, j_start, j_end, rank, size, cart_comm, dims);
     
-    std::vector<double> left_prim{rho_L, u_L, v_L, p_L};
-    std::vector<double> right_prim{rho_R, u_R, v_R, p_R};
-    auto analytic_final = compute_analytic_solution_2d(
-    x_min, x_max, y_min, y_max, Nx, Ny, fict_x, fict_y, curr_time, left_prim, right_prim, g);
-    
-    std::ofstream fout(output_dir + "final_results.csv");
-    fout << "x,y,rho,u,v,p,rho_exact,u_exact,v_exact,p_exact\n";
-    for(int i = fict_x; i < Nx_with_fict_cells - fict_x; i++) {
-        double x = x_min + (i - fict_x + 0.5) * dx;
-        for(int j = fict_y; j < Ny_with_fict_cells - fict_y; j++){
-            
-            double y = y_min + (j - fict_y + 0.5) * dy;
-            std::vector<double> prim = cons_to_noncons(u_prev[i][j], g);
-            std::vector<double> prim_exact = analytic_final[i][j];
+    if (rank == 0) {
+        std::string output_dir = "../output/steps/";
+        std::filesystem::create_directories(output_dir);
         
-            fout << x << "," << y << "," << prim[RHO] << "," << prim[U] << "," << prim[V] << "," << prim[P] << ","
-                 << prim_exact[0] << "," << prim_exact[1] << "," << prim_exact[2] << "," << prim_exact[3] <<"\n";
+        std::vector<double> left_prim{rho_L, u_L, v_L, p_L};
+        std::vector<double> right_prim{rho_R, u_R, v_R, p_R};
+        auto analytic_final = compute_analytic_solution_2d(
+        x_min, x_max, y_min, y_max, Nx, Ny, fict_x, fict_y, curr_time, left_prim, right_prim, g);
+        
+        std::ofstream fout(output_dir + "final_results.csv");
+        fout << "x,y,rho,u,v,p,rho_exact,u_exact,v_exact,p_exact\n";
+        for(int i = fict_x; i < Nx_with_fict_cells - fict_x; i++) {
+            double x = x_min + (i - fict_x + 0.5) * dx;
+            for(int j = fict_y; j < Ny_with_fict_cells - fict_y; j++){
+                double y = y_min + (j - fict_y + 0.5) * dy;
+                std::vector<double> prim = cons_to_noncons(u_prev[i][j], g);
+                std::vector<double> prim_exact = analytic_final[i][j];
+            
+                fout << x << "," << y << "," << prim[RHO] << "," << prim[U] << "," << prim[V] << "," << prim[P] << ","
+                     << prim_exact[0] << "," << prim_exact[1] << "," << prim_exact[2] << "," << prim_exact[3] <<"\n";
+            }
         }
+        fout.close();
+
+        double seconds = duration.count() / 1000.0;
+        std::cout << "==========================================" << std::endl;
+        std::cout << "Calculation completed! Final time: " << curr_time << std::endl;
+        std::cout << "Total execution time: " << std::fixed << std::setprecision(3) 
+                  << seconds << " seconds (" << duration.count() << " milliseconds)" << std::endl;
+        std::cout << "==========================================" << std::endl;
     }
-    fout.close();
 
-    std::cout << "Calculation completed! Final time: " << curr_time << std::endl;
-
-        // Вывод времени выполнения
-    double seconds = duration.count() / 1000.0;
-    std::cout << "==========================================" << std::endl;
-    std::cout << "Calculation completed! Final time: " << curr_time << std::endl;
-    std::cout << "Total execution time: " << std::fixed << std::setprecision(3) 
-              << seconds << " seconds (" << duration.count() << " milliseconds)" << std::endl;
-    std::cout << "==========================================" << std::endl;
+    MPI_Finalize();
     return 0;
 
 }

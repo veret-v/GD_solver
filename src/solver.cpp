@@ -1841,6 +1841,151 @@ std::vector<double> roe_flux_new(const std::vector<double>& left_cons,
 }
 
 
+// Функция для вычисления границ [start, end) для одномерного разбиения
+void get_subdomain_bounds(int N, int P, int rank, int& start, int& end) {
+    int base_count = N / P;
+    int remainder = N % P;
+
+    if (rank < remainder) {
+        // Первые 'remainder' процессов получают на 1 ячейку больше
+        start = rank * (base_count + 1);
+        end = start + (base_count + 1);
+    } else {
+        // Остальные получают базовое количество
+        start = rank * base_count + remainder;
+        end = start + base_count;
+    }
+}
 
 
 
+
+
+void exchange_halos_global(std::vector<std::vector<std::vector<double>>>& u,
+                           MPI_Comm cart_comm, int fict_x, int fict_y,
+                           int i_start, int i_end, int j_start, int j_end,
+                           int left_rank, int right_rank, int down_rank, int up_rank) {
+    const int M = 4;
+    MPI_Status status;
+
+    // --- ОСЬ X (Лево / Право) ---
+    int y_len = j_end - j_start; // Обмениваемся только своей высотой по Y
+    int buf_size_x = fict_x * y_len * M;
+    std::vector<double> send_left(buf_size_x), recv_left(buf_size_x);
+    std::vector<double> send_right(buf_size_x), recv_right(buf_size_x);
+
+    // Упаковка по X
+    int idx_sl = 0, idx_sr = 0;
+    for (int i = 0; i < fict_x; ++i) {
+        for (int j = j_start; j < j_end; ++j) {
+            for (int k = 0; k < M; ++k) {
+                send_left[idx_sl++]  = u[i_start + i][j][k];           // Внутренний левый край
+                send_right[idx_sr++] = u[i_end - fict_x + i][j][k];    // Внутренний правый край
+            }
+        }
+    }
+
+    // Обмен по X
+    MPI_Sendrecv(send_left.data(), buf_size_x, MPI_DOUBLE, left_rank, 0,
+                 recv_right.data(), buf_size_x, MPI_DOUBLE, right_rank, 0, cart_comm, &status);
+    MPI_Sendrecv(send_right.data(), buf_size_x, MPI_DOUBLE, right_rank, 1,
+                 recv_left.data(), buf_size_x, MPI_DOUBLE, left_rank, 1, cart_comm, &status);
+
+    // Распаковка по X
+    int idx_rl = 0, idx_rr = 0;
+    for (int i = 0; i < fict_x; ++i) {
+        for (int j = j_start; j < j_end; ++j) {
+            for (int k = 0; k < M; ++k) {
+                if (left_rank != MPI_PROC_NULL)  u[i_start - fict_x + i][j][k] = recv_left[idx_rl++];
+                if (right_rank != MPI_PROC_NULL) u[i_end + i][j][k] = recv_right[idx_rr++];
+            }
+        }
+    }
+
+    // --- ОСЬ Y (Низ / Верх) ---
+    // Важно: расширяем обмен по X, чтобы передать угловые фиктивные ячейки!
+    int x_len = (i_end - i_start) + (left_rank != MPI_PROC_NULL ? fict_x : 0) + (right_rank != MPI_PROC_NULL ? fict_x : 0);
+    int x_start_exchange = (left_rank != MPI_PROC_NULL) ? i_start - fict_x : i_start;
+    int x_end_exchange   = (right_rank != MPI_PROC_NULL) ? i_end + fict_x : i_end;
+
+    int buf_size_y = fict_y * x_len * M;
+    std::vector<double> send_down(buf_size_y), recv_down(buf_size_y);
+    std::vector<double> send_up(buf_size_y), recv_up(buf_size_y);
+
+    // Упаковка по Y
+    int idx_sd = 0, idx_su = 0;
+    for (int i = x_start_exchange; i < x_end_exchange; ++i) {
+        for (int j = 0; j < fict_y; ++j) {
+            for (int k = 0; k < M; ++k) {
+                send_down[idx_sd++] = u[i][j_start + j][k];
+                send_up[idx_su++]   = u[i][j_end - fict_y + j][k];
+            }
+        }
+    }
+
+    // Обмен по Y
+    MPI_Sendrecv(send_down.data(), buf_size_y, MPI_DOUBLE, down_rank, 2,
+                 recv_up.data(), buf_size_y, MPI_DOUBLE, up_rank, 2, cart_comm, &status);
+    MPI_Sendrecv(send_up.data(), buf_size_y, MPI_DOUBLE, up_rank, 3,
+                 recv_down.data(), buf_size_y, MPI_DOUBLE, down_rank, 3, cart_comm, &status);
+
+    // Распаковка по Y
+    int idx_rd = 0, idx_ru = 0;
+    for (int i = x_start_exchange; i < x_end_exchange; ++i) {
+        for (int j = 0; j < fict_y; ++j) {
+            for (int k = 0; k < M; ++k) {
+                if (down_rank != MPI_PROC_NULL) u[i][j_start - fict_y + j][k] = recv_down[idx_rd++];
+                if (up_rank != MPI_PROC_NULL)   u[i][j_end + j][k] = recv_up[idx_ru++];
+            }
+        }
+    }
+}
+
+
+
+
+// --- Сборка всех поддоменов на rank == 0 для безопасного вывода в файл ---
+void gather_to_root(std::vector<std::vector<std::vector<double>>>& u, 
+                    int Nx, int Ny, int fict_x, int fict_y,
+                    int i_start, int i_end, int j_start, int j_end,
+                    int rank, int size, MPI_Comm cart_comm, int* dims) {
+    const int M_VARS = 4;
+    int local_Nx = i_end - i_start;
+    int local_Ny = j_end - j_start;
+    int buf_size = local_Nx * local_Ny * M_VARS;
+    std::vector<double> send_buf(buf_size);
+    
+    int idx = 0;
+    for(int i = i_start; i < i_end; ++i) {
+        for(int j = j_start; j < j_end; ++j) {
+            for(int k = 0; k < M_VARS; ++k) send_buf[idx++] = u[i][j][k];
+        }
+    }
+
+    if (rank == 0) {
+        for (int p = 1; p < size; ++p) {
+            int p_coords[2];
+            MPI_Cart_coords(cart_comm, p, 2, p_coords);
+            
+            int p_i_start, p_i_end, p_j_start, p_j_end;
+            get_subdomain_bounds(Nx, dims[0], p_coords[0], p_i_start, p_i_end);
+            get_subdomain_bounds(Ny, dims[1], p_coords[1], p_j_start, p_j_end);
+            p_i_start += fict_x; p_i_end += fict_x;
+            p_j_start += fict_y; p_j_end += fict_y;
+            
+            int p_buf_size = (p_i_end - p_i_start) * (p_j_end - p_j_start) * M_VARS;
+            std::vector<double> recv_buf(p_buf_size);
+            
+            MPI_Recv(recv_buf.data(), p_buf_size, MPI_DOUBLE, p, 0, cart_comm, MPI_STATUS_IGNORE);
+            
+            int r_idx = 0;
+            for(int i = p_i_start; i < p_i_end; ++i) {
+                for(int j = p_j_start; j < p_j_end; ++j) {
+                    for(int k = 0; k < M_VARS; ++k) u[i][j][k] = recv_buf[r_idx++];
+                }
+            }
+        }
+    } else {
+        MPI_Send(send_buf.data(), buf_size, MPI_DOUBLE, 0, 0, cart_comm);
+    }
+}

@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(GodunovSolver)  # ← Измените название проекта
+project(GodunovSolver)  #  название проекта
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
+find_package(MPI REQUIRED)
+include_directories(${MPI_CXX_INCLUDE_DIRS})
 # Добавьте все исходные файлы
 add_executable(${PROJECT_NAME}
     src/main.cpp
@@ -24,5 +25,6 @@ else()
     add_compile_options(-O3 -ffast-math -march=native)
 endif()
 
+target_link_libraries(${PROJECT_NAME} ${MPI_CXX_LIBRARIES})
 # Уберите эту строку - она не нужна, если все файлы уже добавлены выше
 # add_subdirectory("src")
