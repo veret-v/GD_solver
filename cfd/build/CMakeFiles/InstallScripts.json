@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/solvver/html/cfd/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
