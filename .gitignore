@@ -1,4 +1,5 @@
 build/
 *.o
+venv/
 smth.txt.vscode
 .vscode

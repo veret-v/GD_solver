@@ -1,8 +1,8 @@
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#pragma optimize("gt", on)           // Агрессивная оптимизация скорости
-#endif
+// #ifdef _WIN32
+// #define WIN32_LEAN_AND_MEAN
+// #include <windows.h>
+// #pragma optimize("gt", on)           // Агрессивная оптимизация скорости
+// #endif
 
 
 
@@ -1987,5 +1987,351 @@ void gather_to_root(std::vector<std::vector<std::vector<double>>>& u,
         }
     } else {
         MPI_Send(send_buf.data(), buf_size, MPI_DOUBLE, 0, 0, cart_comm);
+    }
+}
+
+
+// solver.cpp (добавить в конец файла)
+
+#include <cmath>
+#include <algorithm>
+// Вспомогательная интерполяция для u-грани (i,j) – значение на восточной грани
+double interpolate_u_to_face(const std::vector<std::vector<double>>& u,
+                             const std::vector<std::vector<double>>& v,
+                             int i, int j, char face) {
+    if (face == 'e') {
+        return 0.5 * (u[i][j] + u[i+1][j]);
+    } else if (face == 'w') {
+        return 0.5 * (u[i][j] + u[i-1][j]);
+    } else if (face == 'n') {
+        // v на северной грани контрольного объёма u
+        return 0.5 * (v[i-1][j+1] + v[i][j+1]);
+    } else if (face == 's') {
+        return 0.5 * (v[i-1][j] + v[i][j]);
+    }
+    return 0.0;
+}
+
+double interpolate_v_to_face(const std::vector<std::vector<double>>& u,
+                             const std::vector<std::vector<double>>& v,
+                             int i, int j, char face) {
+    if (face == 'e') {
+        // u на восточной грани контрольного объёма v
+        return 0.5 * (u[i+1][j-1] + u[i+1][j]);
+    } else if (face == 'w') {
+        return 0.5 * (u[i][j-1] + u[i][j]);
+    } else if (face == 'n') {
+        return 0.5 * (v[i][j] + v[i][j+1]);
+    } else if (face == 's') {
+        return 0.5 * (v[i][j] + v[i][j-1]);
+    }
+    return 0.0;
+}
+
+// Вычисление коэффициентов для уравнения u-импульса
+void compute_momentum_coefficients_u(
+    const std::vector<std::vector<double>>& u,
+    const std::vector<std::vector<double>>& v,
+    const std::vector<std::vector<double>>& p,
+    double dx, double dy, double nu, double rho,
+    double dt, bool steady,
+    std::vector<std::vector<double>>& aP,
+    std::vector<std::vector<double>>& aE,
+    std::vector<std::vector<double>>& aW,
+    std::vector<std::vector<double>>& aN,
+    std::vector<std::vector<double>>& aS,
+    std::vector<std::vector<double>>& H,
+    double U_lid
+) {
+    int Nx = static_cast<int>(u.size()) - 1;      // число ячеек по x (u имеет размер Nx+1)
+    int Ny = static_cast<int>(u[0].size());       // число ячеек по y
+
+    // Инициализация размеров массивов коэффициентов (размер как у u)
+    aP.assign(Nx + 1, std::vector<double>(Ny, 0.0));
+    aE.assign(Nx + 1, std::vector<double>(Ny, 0.0));
+    aW.assign(Nx + 1, std::vector<double>(Ny, 0.0));
+    aN.assign(Nx + 1, std::vector<double>(Ny, 0.0));
+    aS.assign(Nx + 1, std::vector<double>(Ny, 0.0));
+    H.assign(Nx + 1, std::vector<double>(Ny, 0.0));
+
+    double Dx = nu * dy / dx;
+    double Dy = nu * dx / dy;
+
+    for (int i = 1; i < Nx; ++i) {          // внутренние u-грани
+        for (int j = 0; j < Ny; ++j) {
+            // Массовые потоки через грани контрольного объёма (формула (4))
+            // u на восточной и западной гранях
+            double ue = 0.5 * (u[i][j] + u[i + 1][j]);
+            double uw = 0.5 * (u[i][j] + u[i - 1][j]);
+
+            // v на северной и южной гранях (интерполяция v для контрольного объёма u)
+            double vn = 0.5 * (v[i - 1][j + 1] + v[i][j + 1]);
+            double vs = 0.5 * (v[i - 1][j]     + v[i][j]);
+
+            double Fe = rho * ue * dy;
+            double Fw = rho * uw * dy;
+            double Fn = rho * vn * dx;
+            double Fs = rho * vs * dx;
+
+            // Конвективные коэффициенты (upwind) + диффузия (формула (8))
+            aE[i][j] = std::max(-Fe, 0.0) + Dx;
+            aW[i][j] = std::max(Fw, 0.0) + Dx;
+            aN[i][j] = std::max(-Fn, 0.0) + Dy;
+            aS[i][j] = std::max(Fs, 0.0) + Dy;
+
+            // Учет граничных условий (стенки)
+            // Нижняя стенка (no-slip)
+            if (j == 0) {
+                // ghost u = -u(i,0), расстояние до стенки = dy/2
+                aS[i][j] = std::max(Fs, 0.0) + nu * dx / (0.5 * dy);
+            }
+            // Верхняя стенка (движущаяся крышка)
+            if (j == Ny - 1) {
+                // ghost u = 2*U_lid - u(i,Ny-1), расстояние dy/2
+                aN[i][j] = std::max(-Fn, 0.0) + nu * dx / (0.5 * dy);
+            }
+
+            // Диагональный коэффициент
+            double ap_conv_diff = aE[i][j] + aW[i][j] + aN[i][j] + aS[i][j];
+            aP[i][j] = ap_conv_diff;
+            if (!steady) {
+                aP[i][j] += rho * dx * dy / dt;
+            }
+
+            // Оператор H (формула (15))
+            double uE = (i < Nx - 1) ? u[i + 1][j] : 0.0;
+            double uW = (i > 1)      ? u[i - 1][j] : 0.0;
+            double uN = (j < Ny - 1) ? u[i][j + 1] : 0.0;
+            double uS = (j > 0)      ? u[i][j - 1] : 0.0;
+
+            // Учёт граничных ghost-значений в H
+            if (j == 0) {
+                uS = -u[i][j];        // no-slip
+            }
+            if (j == Ny - 1) {
+                uN = 2.0 * U_lid - u[i][j];
+            }
+
+            H[i][j] = aE[i][j] * uE + aW[i][j] * uW + aN[i][j] * uN + aS[i][j] * uS;
+            if (!steady) {
+                H[i][j] += (rho * dx * dy / dt) * u[i][j];
+            }
+        }
+    }
+}
+
+// Аналогичная функция для v-импульса (индексы i=0..Nx-1, j=1..Ny-1)
+void compute_momentum_coefficients_v(
+    const std::vector<std::vector<double>>& u,
+    const std::vector<std::vector<double>>& v,
+    const std::vector<std::vector<double>>& p,
+    double dx, double dy, double nu, double rho,
+    double dt, bool steady,
+    std::vector<std::vector<double>>& aP,
+    std::vector<std::vector<double>>& aE,
+    std::vector<std::vector<double>>& aW,
+    std::vector<std::vector<double>>& aN,
+    std::vector<std::vector<double>>& aS,
+    std::vector<std::vector<double>>& H
+) {
+    int Nx = static_cast<int>(v.size());           // число ячеек по x (0..Nx-1)
+    int Ny = static_cast<int>(v[0].size()) - 1;    // число внутренних граней по y (v имеет размер Ny+1)
+
+    aP.assign(Nx, std::vector<double>(Ny+1, 0.0));
+    aE.assign(Nx, std::vector<double>(Ny+1, 0.0));
+    aW.assign(Nx, std::vector<double>(Ny+1, 0.0));
+    aN.assign(Nx, std::vector<double>(Ny+1, 0.0));
+    aS.assign(Nx, std::vector<double>(Ny+1, 0.0));
+    H.assign(Nx, std::vector<double>(Ny+1, 0.0));
+
+    double Dx = nu * dy / dx;
+    double Dy = nu * dx / dy;
+
+    for (int i = 0; i < Nx; ++i) {
+        for (int j = 1; j < Ny; ++j) {  // внутренние v-грани
+            // Потоки через грани контрольного объёма v
+            double ue = interpolate_v_to_face(u, v, i, j, 'e');
+            double uw = interpolate_v_to_face(u, v, i, j, 'w');
+            double vn = interpolate_v_to_face(u, v, i, j, 'n');
+            double vs = interpolate_v_to_face(u, v, i, j, 's');
+
+            double Fe = rho * ue * dy;
+            double Fw = rho * uw * dy;
+            double Fn = rho * vn * dx;
+            double Fs = rho * vs * dx;
+
+            aE[i][j] = std::max(-Fe, 0.0) + Dx;
+            aW[i][j] = std::max( Fw, 0.0) + Dx;
+            aN[i][j] = std::max(-Fn, 0.0) + Dy;
+            aS[i][j] = std::max( Fs, 0.0) + Dy;
+
+            // Граничные условия на вертикальных стенках
+            if (i == 0) {
+                aW[i][j] = std::max(Fw, 0.0) + nu * dy / (0.5 * dx);
+            }
+            if (i == Nx-1) {
+                aE[i][j] = std::max(-Fe, 0.0) + nu * dy / (0.5 * dx);
+            }
+
+            // Граничные условия на горизонтальных стенках
+            // Нижняя стенка: расстояние от центра пристеночной ячейки (j=1) до стенки = dy/2
+            if (j == 1) {
+                aS[i][j] = std::max(Fs, 0.0) + nu * dx / (0.5 * dy);
+            }
+            // Верхняя стенка: расстояние от центра пристеночной ячейки (j=Ny-1) до стенки = dy/2
+            if (j == Ny-1) {
+                aN[i][j] = std::max(-Fn, 0.0) + nu * dx / (0.5 * dy);
+            }
+
+            // Диагональный коэффициент
+            double ap_conv_diff = aE[i][j] + aW[i][j] + aN[i][j] + aS[i][j];
+            aP[i][j] = ap_conv_diff;
+            if (!steady) {
+                aP[i][j] += rho * dx * dy / dt;
+            }
+
+            // Значения скорости v в соседних узлах
+            double vE = (i < Nx-1) ? v[i+1][j] : 0.0;
+            double vW = (i > 0)   ? v[i-1][j] : 0.0;
+            double vN = (j < Ny-1) ? v[i][j+1] : 0.0;
+            double vS = (j > 1)   ? v[i][j-1] : 0.0;
+
+            // Ghost-значения для H
+            if (i == 0) {
+                vW = -v[i][j];       // левая стенка (no-slip)
+            }
+            if (i == Nx-1) {
+                vE = -v[i][j];       // правая стенка (no-slip)
+            }
+            if (j == 1) {
+                vS = -v[i][j];       // нижняя стенка (no-slip)
+            }
+            if (j == Ny-1) {
+                vN = -v[i][j];       // верхняя стенка (no-slip)
+            }
+
+            H[i][j] = aE[i][j] * vE + aW[i][j] * vW + aN[i][j] * vN + aS[i][j] * vS;
+            if (!steady) {
+                H[i][j] += (rho * dx * dy / dt) * v[i][j];
+            }
+        }
+    }
+}
+
+// Решение уравнения Пуассона для p' (SOR)
+void solve_pressure_correction(
+    const std::vector<std::vector<double>>& u_star,
+    const std::vector<std::vector<double>>& v_star,
+    const std::vector<std::vector<double>>& aP_u,
+    const std::vector<std::vector<double>>& aP_v,
+    double dx, double dy,
+    std::vector<std::vector<double>>& p_corr
+) {
+    int Nx = p_corr.size();
+    int Ny = p_corr[0].size();
+
+    std::vector<std::vector<double>> aE(Nx, std::vector<double>(Ny, 0.0));
+    std::vector<std::vector<double>> aW(Nx, std::vector<double>(Ny, 0.0));
+    std::vector<std::vector<double>> aN(Nx, std::vector<double>(Ny, 0.0));
+    std::vector<std::vector<double>> aS(Nx, std::vector<double>(Ny, 0.0));
+    std::vector<std::vector<double>> b(Nx, std::vector<double>(Ny, 0.0));
+
+    // Вычисление коэффициентов Пуассона (формула (18))
+    for (int i = 0; i < Nx; ++i) {
+        for (int j = 0; j < Ny; ++j) {
+            if (i < Nx-1) aE[i][j] = (dy * dy) / aP_u[i+1][j];
+            if (i > 0)    aW[i][j] = (dy * dy) / aP_u[i][j];
+            if (j < Ny-1) aN[i][j] = (dx * dx) / aP_v[i][j+1];
+            if (j > 0)    aS[i][j] = (dx * dx) / aP_v[i][j];
+            double aP = aE[i][j] + aW[i][j] + aN[i][j] + aS[i][j];
+
+            // Правая часть: -div(u*) (формула (19))
+            double div = (u_star[i+1][j] - u_star[i][j]) * dy
+                       + (v_star[i][j+1] - v_star[i][j]) * dx;
+            b[i][j] = -div;
+
+            // Для стабильности: если aP очень мало, задаём большое число
+            if (aP < 1e-12) aP = 1e12;
+            // Сохраняем aP в p_corr временно? Удобнее хранить отдельно, но для простоты используем SOR
+        }
+    }
+
+    // Фиксация давления в одной точке (например, (0,0))
+    // В матричной форме это означает, что уравнение для p'(0,0) заменяется на p'(0,0)=0
+
+    // Итерации SOR
+    double omega = 1.5;
+    int max_iter = 5000;
+    double tol = 1e-8;
+
+    for (int iter = 0; iter < max_iter; ++iter) {
+        double res_norm = 0.0;
+        for (int i = 0; i < Nx; ++i) {
+            for (int j = 0; j < Ny; ++j) {
+                if (i == 0 && j == 0) {
+                    p_corr[i][j] = 0.0;  // фиксация
+                    continue;
+                }
+                double ae = (i < Nx-1) ? aE[i][j] : 0.0;
+                double aw = (i > 0)    ? aW[i][j] : 0.0;
+                double an = (j < Ny-1) ? aN[i][j] : 0.0;
+                double as = (j > 0)    ? aS[i][j] : 0.0;
+                double ap = ae + aw + an + as;
+                if (ap < 1e-12) ap = 1e12;
+
+                double p_e = (i < Nx-1) ? p_corr[i+1][j] : 0.0;
+                double p_w = (i > 0)    ? p_corr[i-1][j] : 0.0;
+                double p_n = (j < Ny-1) ? p_corr[i][j+1] : 0.0;
+                double p_s = (j > 0)    ? p_corr[i][j-1] : 0.0;
+
+                double p_new = (ae * p_e + aw * p_w + an * p_n + as * p_s + b[i][j]) / ap;
+                p_corr[i][j] = p_corr[i][j] + omega * (p_new - p_corr[i][j]);
+
+                double res = ap * p_corr[i][j] - (ae * p_e + aw * p_w + an * p_n + as * p_s + b[i][j]);
+                res_norm += res * res;
+            }
+        }
+        if (sqrt(res_norm / (Nx*Ny)) < tol) break;
+    }
+}
+
+// Коррекция скоростей и давления (формулы (22)-(23))
+void correct_velocity_pressure(
+    std::vector<std::vector<double>>& u,
+    std::vector<std::vector<double>>& v,
+    std::vector<std::vector<double>>& p,
+    const std::vector<std::vector<double>>& u_star,
+    const std::vector<std::vector<double>>& v_star,
+    const std::vector<std::vector<double>>& p_corr,
+    const std::vector<std::vector<double>>& aP_u,
+    const std::vector<std::vector<double>>& aP_v,
+    double dx, double dy, double alpha_p
+) {
+    int Nx_u = u.size() - 1;
+    int Ny_u = u[0].size();
+    int Nx_v = v.size();
+    int Ny_v = v[0].size() - 1;
+    int Nx_p = p.size();
+    int Ny_p = p[0].size();
+
+    // Давление
+    for (int i = 0; i < Nx_p; ++i)
+        for (int j = 0; j < Ny_p; ++j)
+            p[i][j] += alpha_p * p_corr[i][j];
+
+    // Скорость u
+    for (int i = 1; i < Nx_u; ++i) {
+        for (int j = 0; j < Ny_u; ++j) {
+            double dp = p_corr[i][j] - p_corr[i-1][j];
+            u[i][j] = u_star[i][j] - (dy / aP_u[i][j]) * dp;
+        }
+    }
+
+    // Скорость v
+    for (int i = 0; i < Nx_v; ++i) {
+        for (int j = 1; j < Ny_v; ++j) {
+            double dp = p_corr[i][j] - p_corr[i][j-1];
+            v[i][j] = v_star[i][j] - (dx / aP_v[i][j]) * dp;
+        }
     }
 }

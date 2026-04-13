@@ -1,3 +1,377 @@
+// main.cpp — последовательная реализация SIMPLE / PISO / PIMPLE
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
+#include <vector>
+#include <cmath>
+#include <chrono>
+#include <filesystem>
+#include "./parser.h"
+#include "./solver.h"
+
+// Структуры параметров для каждого метода
+struct SIMPLEParams {
+    double alpha_u;
+    double alpha_p;
+    int max_iter;
+    double tol;
+};
+
+struct PISOParams {
+    double dt;
+    double t_end;
+    int n_correctors;
+};
+
+struct PIMPLEParams {
+    double dt;
+    double t_end;
+    int n_outer;
+    int n_correctors;
+    double alpha_u;
+    double alpha_p;
+};
+void apply_boundary_conditions(std::vector<std::vector<double>>& u,
+                               std::vector<std::vector<double>>& v,
+                               int Nx, int Ny, double U_lid)
+{
+    // u имеет размер (Nx+1) x Ny
+    // Левая стенка (i = 0) – неподвижна
+    for (int j = 0; j < Ny; ++j) u[0][j] = 0.0;
+    // Правая стенка (i = Nx) – неподвижна
+    for (int j = 0; j < Ny; ++j) u[Nx][j] = 0.0;
+    // Верхняя крышка (j = Ny-1) – движется со скоростью U_lid
+    for (int i = 0; i <= Nx; ++i) u[i][Ny-1] = U_lid;
+    // Нижняя стенка для u не требует явной установки,
+    // так как граничное условие уже учтено в коэффициентах.
+
+    // v имеет размер Nx x (Ny+1)
+    // Нижняя стенка (j = 0) – неподвижна
+    for (int i = 0; i < Nx; ++i) v[i][0] = 0.0;
+    // Верхняя стенка (j = Ny) – неподвижна
+    for (int i = 0; i < Nx; ++i) v[i][Ny] = 0.0;
+    // Боковые стенки для v (i = 0 и i = Nx-1) – неподвижны
+    for (int j = 1; j < Ny; ++j) {
+        v[0][j] = 0.0;
+        v[Nx-1][j] = 0.0;
+    }
+}
+
+int main(int argc, char** argv) {
+    // Чтение конфигурации
+    std::string system_ini = "../configs/input.ini";
+    std::string cases_ini = "../configs/SODA.ini";  // или другой файл с начальными условиями
+
+    IniParser sys(system_ini);
+    std::string case_name = sys.getString("case_name");
+    double x_min = sys.getDouble("x_min");
+    double x_max = sys.getDouble("x_max");
+    double y_min = sys.getDouble("y_min");
+    double y_max = sys.getDouble("y_max");
+    int Nx = sys.getInt("Nx");
+    int Ny = sys.getInt("Ny");
+    double tmax = sys.getDouble("tmax");
+    double cfl = sys.getDouble("cfl");   // для несжимаемых методов не используется напрямую
+    double Re = sys.getDouble("Re");      // число Рейнольдса
+    double U_lid = sys.getDouble("U_lid"); // скорость крышки (для каверны)
+    int equation_type = sys.getInt("equation_type"); // 8=SIMPLE, 9=PISO, 10=PIMPLE
+
+    // Параметры метода
+    SIMPLEParams simp;
+    PISOParams piso;
+    PIMPLEParams pimple;
+
+    if (equation_type == 8) {
+        simp.alpha_u = sys.getDouble("alpha_u");
+        simp.alpha_p = sys.getDouble("alpha_p");
+        simp.max_iter = sys.getInt("max_iter_simple");
+        simp.tol = sys.getDouble("tol_simple");
+    } else if (equation_type == 9) {
+        piso.dt = sys.getDouble("dt");
+        piso.t_end = tmax;
+        piso.n_correctors = sys.getInt("n_correctors");
+    } else if (equation_type == 10) {
+        pimple.dt = sys.getDouble("dt");
+        pimple.t_end = tmax;
+        pimple.n_outer = sys.getInt("nOuterCorr");
+        pimple.n_correctors = sys.getInt("nCorrectors");
+        pimple.alpha_u = sys.getDouble("alpha_u");
+        pimple.alpha_p = sys.getDouble("alpha_p");
+    }
+
+    // Параметры вывода
+    int step_out = sys.getInt("step_out");
+    std::string output_dir = "../output/steps/";
+    std::filesystem::create_directories(output_dir);
+
+    // Физические параметры
+    double rho = 1.0;
+    double nu = 1.0 / Re;
+    double Lx = x_max - x_min;
+    double Ly = y_max - y_min;
+    double dx = Lx / Nx;
+    double dy = Ly / Ny;
+
+    // Инициализация staggered массивов
+    std::vector<std::vector<double>> u(Nx+1, std::vector<double>(Ny, 0.0));
+    std::vector<std::vector<double>> v(Nx, std::vector<double>(Ny+1, 0.0));
+    std::vector<std::vector<double>> p(Nx, std::vector<double>(Ny, 0.0));
+
+    // Начальные условия (для каверны: везде 0, кроме верхней границы u = U_lid)
+    for (int i = 0; i <= Nx; ++i)
+        for (int j = 0; j < Ny; ++j)
+            u[i][j] = 0.0;
+    for (int i = 0; i < Nx; ++i)
+        for (int j = 0; j <= Ny; ++j)
+            v[i][j] = 0.0;
+    // Верхняя крышка
+    apply_boundary_conditions(u, v, Nx, Ny, U_lid);
+
+    // Функция для сохранения текущего состояния в CSV
+    auto save_state = [&](int step, double time, const std::string& suffix = "") {
+        std::ostringstream filename;
+        filename << output_dir << "step_" << std::setw(5) << std::setfill('0') << step
+                 << "_t_" << std::fixed << std::setprecision(4) << time << suffix << ".csv";
+        std::ofstream fout(filename.str());
+        fout << "x,y,u,v,p\n";
+        // Вычисляем скорость в центрах ячеек для вывода
+        for (int i = 0; i < Nx; ++i) {
+            double x = x_min + (i + 0.5) * dx;
+            for (int j = 0; j < Ny; ++j) {
+                double y = y_min + (j + 0.5) * dy;
+                double u_c = 0.5 * (u[i][j] + u[i+1][j]);
+                double v_c = 0.5 * (v[i][j] + v[i][j+1]);
+                fout << x << "," << y << ","
+                     << u_c << "," << v_c << "," << p[i][j] << "\n";
+            }
+        }
+        fout.close();
+    };
+
+    // Сохраняем начальное состояние
+    save_state(0, 0.0, "_initial");
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    // =============== SIMPLE ===============
+    if (equation_type == 8) {
+        std::cout << "Starting SIMPLE, Nx=" << Nx << ", Ny=" << Ny << ", Re=" << Re << "\n";
+        for (int iter = 1; iter <= simp.max_iter; ++iter) {
+            // Сохраняем старые значения для проверки сходимости
+            auto u_old = u;
+            auto v_old = v;
+
+            // 1. Коэффициенты и предиктор u*
+            std::vector<std::vector<double>> aP_u, aE_u, aW_u, aN_u, aS_u, H_u;
+            compute_momentum_coefficients_u(u, v, p, dx, dy, nu, rho, 0.0, true,
+                                            aP_u, aE_u, aW_u, aN_u, aS_u, H_u, U_lid);
+            apply_boundary_conditions(u, v, Nx, Ny, U_lid);
+            std::vector<std::vector<double>> u_star = u;
+            for (int i = 1; i < Nx; ++i) {
+                for (int j = 0; j < Ny; ++j) {
+                    double H = H_u[i][j];
+                    double dp = (p[i][j] - p[i-1][j]) * dy;
+                    u_star[i][j] = (1.0 - simp.alpha_u) * u[i][j] +
+                                    (simp.alpha_u / aP_u[i][j]) * (H - dp);
+                }
+            }
+
+            // 2. Коэффициенты и предиктор v*
+            std::vector<std::vector<double>> aP_v, aE_v, aW_v, aN_v, aS_v, H_v;
+            compute_momentum_coefficients_v(u, v, p, dx, dy, nu, rho, 0.0, true,
+                                            aP_v, aE_v, aW_v, aN_v, aS_v, H_v);
+            apply_boundary_conditions(u, v, Nx, Ny, U_lid);
+            std::vector<std::vector<double>> v_star = v;
+            for (int i = 0; i < Nx; ++i) {
+                for (int j = 1; j < Ny; ++j) {
+                    double H = H_v[i][j];
+                    double dp = (p[i][j] - p[i][j-1]) * dx;
+                    v_star[i][j] = (1.0 - simp.alpha_u) * v[i][j] +
+                                    (simp.alpha_u / aP_v[i][j]) * (H - dp);
+                }
+            }
+
+            // 3. Уравнение Пуассона для p'
+            std::vector<std::vector<double>> p_corr(Nx, std::vector<double>(Ny, 0.0));
+            solve_pressure_correction(u_star, v_star, aP_u, aP_v, dx, dy, p_corr);
+
+            // 4. Коррекция
+            correct_velocity_pressure(u, v, p, u_star, v_star, p_corr, aP_u, aP_v,
+                                      dx, dy, simp.alpha_p);
+            apply_boundary_conditions(u, v, Nx, Ny, U_lid);
+
+            // Проверка сходимости
+            double max_du = 0.0;
+            for (int i = 1; i < Nx; ++i)
+                for (int j = 0; j < Ny; ++j)
+                    max_du = std::max(max_du, std::abs(u[i][j] - u_old[i][j]));
+            for (int i = 0; i < Nx; ++i)
+                for (int j = 1; j < Ny; ++j)
+                    max_du = std::max(max_du, std::abs(v[i][j] - v_old[i][j]));
+
+            if (iter % 100 == 0 || max_du < simp.tol) {
+                std::cout << "SIMPLE iter " << iter << ", max_du = " << max_du << "\n";
+                if (iter % step_out == 0 || max_du < simp.tol)
+                    save_state(iter, iter, "");
+            }
+            if (max_du < simp.tol) {
+                std::cout << "SIMPLE converged at iteration " << iter << "\n";
+                break;
+            }
+        }
+    }
+
+    // =============== PISO ===============
+    else if (equation_type == 9) {
+        std::cout << "Starting PISO, Nx=" << Nx << ", Ny=" << Ny << ", Re=" << Re
+                  << ", dt=" << piso.dt << ", t_end=" << piso.t_end << "\n";
+        double t = 0.0;
+        int step = 0;
+        save_state(0, 0.0, "");
+        while (t < piso.t_end) {
+            auto u_old = u;
+            auto v_old = v;
+            auto p_old = p;
+
+            // Предиктор (без релаксации)
+            std::vector<std::vector<double>> aP_u, aE_u, aW_u, aN_u, aS_u, H_u;
+            compute_momentum_coefficients_u(u_old, v_old, p_old, dx, dy, nu, rho,
+                                            piso.dt, false, aP_u, aE_u, aW_u, aN_u, aS_u, H_u, U_lid);
+            apply_boundary_conditions(u, v, Nx, Ny, U_lid);
+            std::vector<std::vector<double>> u_star = u_old;
+            for (int i = 1; i < Nx; ++i) {
+                for (int j = 0; j < Ny; ++j) {
+                    double H = H_u[i][j];
+                    double dp = (p_old[i][j] - p_old[i-1][j]) * dy;
+                    u_star[i][j] = (H - dp) / aP_u[i][j];
+                }
+            }
+
+            std::vector<std::vector<double>> aP_v, aE_v, aW_v, aN_v, aS_v, H_v;
+            compute_momentum_coefficients_v(u_old, v_old, p_old, dx, dy, nu, rho,
+                                            piso.dt, false, aP_v, aE_v, aW_v, aN_v, aS_v, H_v);
+            apply_boundary_conditions(u, v, Nx, Ny, U_lid);
+            std::vector<std::vector<double>> v_star = v_old;
+            for (int i = 0; i < Nx; ++i) {
+                for (int j = 1; j < Ny; ++j) {
+                    double H = H_v[i][j];
+                    double dp = (p_old[i][j] - p_old[i][j-1]) * dx;
+                    v_star[i][j] = (H - dp) / aP_v[i][j];
+                }
+            }
+
+            u = u_star;
+            v = v_star;
+            p = p_old;
+
+            // Коррекции
+            for (int corr = 0; corr < piso.n_correctors; ++corr) {
+                std::vector<std::vector<double>> p_corr(Nx, std::vector<double>(Ny, 0.0));
+                solve_pressure_correction(u, v, aP_u, aP_v, dx, dy, p_corr);
+                correct_velocity_pressure(u, v, p, u, v, p_corr, aP_u, aP_v, dx, dy, 1.0);
+            }
+            apply_boundary_conditions(u, v, Nx, Ny, U_lid);
+
+            t += piso.dt;
+            step++;
+
+            if (step % step_out == 0) {
+                std::cout << "PISO step " << step << ", t = " << t << "\n";
+                save_state(step, t, "");
+            }
+        }
+    }
+
+    // =============== PIMPLE ===============
+    else if (equation_type == 10) {
+        std::cout << "Starting PIMPLE, Nx=" << Nx << ", Ny=" << Ny << ", Re=" << Re
+                  << ", dt=" << pimple.dt << ", t_end=" << pimple.t_end
+                  << ", nOuter=" << pimple.n_outer << ", nCorr=" << pimple.n_correctors << "\n";
+        double t = 0.0;
+        int step = 0;
+        save_state(0, 0.0, "");
+        while (t < pimple.t_end) {            
+            auto u_old = u;
+            auto v_old = v;
+            auto p_old = p;
+
+            for (int outer = 0; outer < pimple.n_outer; ++outer) {
+                double alpha_u_cur = (outer == pimple.n_outer - 1) ? 1.0 : pimple.alpha_u;
+                double alpha_p_cur = (outer == pimple.n_outer - 1) ? 1.0 : pimple.alpha_p;
+
+                // Коэффициенты u
+                std::vector<std::vector<double>> aP_u, aE_u, aW_u, aN_u, aS_u, H_u;
+                compute_momentum_coefficients_u(u, v, p, dx, dy, nu, rho,
+                                                pimple.dt, false, aP_u, aE_u, aW_u, aN_u, aS_u, H_u, U_lid);
+                apply_boundary_conditions(u, v, Nx, Ny, U_lid);
+                std::vector<std::vector<double>> u_star = u;
+                for (int i = 1; i < Nx; ++i) {
+                    for (int j = 0; j < Ny; ++j) {
+                        double H = H_u[i][j];
+                        double dp = (p[i][j] - p[i-1][j]) * dy;
+                        u_star[i][j] = (1.0 - alpha_u_cur) * u[i][j] +
+                                        (alpha_u_cur / aP_u[i][j]) * (H - dp);
+                        // Сохраняем эффективную диагональ
+                        aP_u[i][j] /= alpha_u_cur;
+                    }
+                }
+
+                // Коэффициенты v
+                std::vector<std::vector<double>> aP_v, aE_v, aW_v, aN_v, aS_v, H_v;
+                compute_momentum_coefficients_v(u, v, p, dx, dy, nu, rho,
+                                                pimple.dt, false, aP_v, aE_v, aW_v, aN_v, aS_v, H_v);
+                apply_boundary_conditions(u, v, Nx, Ny, U_lid);
+                std::vector<std::vector<double>> v_star = v;
+                for (int i = 0; i < Nx; ++i) {
+                    for (int j = 1; j < Ny; ++j) {
+                        double H = H_v[i][j];
+                        double dp = (p[i][j] - p[i][j-1]) * dx;
+                        v_star[i][j] = (1.0 - alpha_u_cur) * v[i][j] +
+                                        (alpha_u_cur / aP_v[i][j]) * (H - dp);
+                        aP_v[i][j] /= alpha_u_cur;
+                    }
+                }
+
+                // Внутренние коррекции
+                std::vector<std::vector<double>> u_corr = u_star;
+                std::vector<std::vector<double>> v_corr = v_star;
+                std::vector<std::vector<double>> p_corr_field = p;
+                for (int corr = 0; corr < pimple.n_correctors; ++corr) {
+                    std::vector<std::vector<double>> p_corr(Nx, std::vector<double>(Ny, 0.0));
+                    solve_pressure_correction(u_corr, v_corr, aP_u, aP_v, dx, dy, p_corr);
+                    correct_velocity_pressure(u_corr, v_corr, p_corr_field,
+                                              u_corr, v_corr, p_corr,
+                                              aP_u, aP_v, dx, dy, alpha_p_cur);
+                }
+                apply_boundary_conditions(u, v, Nx, Ny, U_lid);
+                u = u_corr;
+                v = v_corr;
+                p = p_corr_field;
+            }
+
+           
+
+            t += pimple.dt;
+            step++;
+
+            if (step % step_out == 0) {
+                std::cout << "PIMPLE step " << step << ", t = " << t << "\n";
+                save_state(step, t, "");
+            }
+        }
+    }
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    std::cout << "Calculation completed in " << duration.count() / 1000.0 << " seconds.\n";
+
+    // Сохраняем финальное состояние
+    save_state(9999, (equation_type == 8) ? simp.max_iter : tmax, "_final");
+
+    return 0;
+}
+/*
 #include <iostream>
 #include <random>
 #include <vector>
@@ -161,7 +535,7 @@ int main(int argc, char** argv) {
 
 
         exchange_halos_global(u_prev, cart_comm, fict_x, fict_y, i_start, i_end, j_start, j_end, left_rank, right_rank, down_rank, up_rank);
-        /*
+     
         // 1. Установка граничных условий на текущем слое
         // 1. Граничные условия (Ghost Cells)
         // Лево/Право
@@ -183,7 +557,7 @@ int main(int argc, char** argv) {
         if ((curr_time + dt) > tmax){
             dt = tmax - curr_time; // Исправлена логика обрезки шага
         }
-        */
+       
 
         // 2. Физические граничные условия (применяются только если нет соседа)
         if (left_rank == MPI_PROC_NULL) {
@@ -487,3 +861,4 @@ int main(int argc, char** argv) {
     return 0;
 
 }
+*/

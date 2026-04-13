@@ -170,4 +170,67 @@ void gather_to_root(std::vector<std::vector<std::vector<double>>>& u,
                     int Nx, int Ny, int fict_x, int fict_y,
                     int i_start, int i_end, int j_start, int j_end,
                     int rank, int size, MPI_Comm cart_comm, int* dims);
+
+
+// solver.h (добавить в конец файла перед #endif)
+
+// Основные функции для несжимаемого решателя
+void compute_momentum_coefficients_u(
+    const std::vector<std::vector<double>>& u,
+    const std::vector<std::vector<double>>& v,
+    const std::vector<std::vector<double>>& p,
+    double dx, double dy, double nu, double rho,
+    double dt, bool steady,
+    std::vector<std::vector<double>>& aP,
+    std::vector<std::vector<double>>& aE,
+    std::vector<std::vector<double>>& aW,
+    std::vector<std::vector<double>>& aN,
+    std::vector<std::vector<double>>& aS,
+    std::vector<std::vector<double>>& H,
+    double U_lid = 0.0
+);
+
+void compute_momentum_coefficients_v(
+    const std::vector<std::vector<double>>& u,
+    const std::vector<std::vector<double>>& v,
+    const std::vector<std::vector<double>>& p,
+    double dx, double dy, double nu, double rho,
+    double dt, bool steady,
+    std::vector<std::vector<double>>& aP,
+    std::vector<std::vector<double>>& aE,
+    std::vector<std::vector<double>>& aW,
+    std::vector<std::vector<double>>& aN,
+    std::vector<std::vector<double>>& aS,
+    std::vector<std::vector<double>>& H
+);
+
+void solve_pressure_correction(
+    const std::vector<std::vector<double>>& u_star,
+    const std::vector<std::vector<double>>& v_star,
+    const std::vector<std::vector<double>>& aP_u,
+    const std::vector<std::vector<double>>& aP_v,
+    double dx, double dy,
+    std::vector<std::vector<double>>& p_corr
+);
+
+void correct_velocity_pressure(
+    std::vector<std::vector<double>>& u,
+    std::vector<std::vector<double>>& v,
+    std::vector<std::vector<double>>& p,
+    const std::vector<std::vector<double>>& u_star,
+    const std::vector<std::vector<double>>& v_star,
+    const std::vector<std::vector<double>>& p_corr,
+    const std::vector<std::vector<double>>& aP_u,
+    const std::vector<std::vector<double>>& aP_v,
+    double dx, double dy, double alpha_p
+);
+
+// Вспомогательные функции для staggered сетки
+double interpolate_u_to_face(const std::vector<std::vector<double>>& u,
+                             const std::vector<std::vector<double>>& v,
+                             int i, int j, char face);
+
+double interpolate_v_to_face(const std::vector<std::vector<double>>& u,
+                             const std::vector<std::vector<double>>& v,
+                             int i, int j, char face);
 #endif
