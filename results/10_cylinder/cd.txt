@@ -1,7 +1,0 @@
-Cylinder R=1, center=(0,0)
-M_inf = 0.3
-alpha_deg = 0
-gamma = 1.4
-t_final = 2.0
-Cd = -0.543727
-Cl = -0.00724154

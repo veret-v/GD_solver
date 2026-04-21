@@ -1,9 +1,0 @@
-NACA 0012
-M_inf = 0.8
-physical_alpha_deg = 1.25
-solver_alpha_deg = -1.25
-gamma = 1.4
-t_final = 2.0
-Cd = -0.0898205
-Cl = 0.226761
-

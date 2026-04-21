@@ -34,7 +34,7 @@ inline Face::BC bc_from_name(const std::string &name)
     return Face::BC::Interior;
 }
 
-// CHECK: BUILD_FACES
+
 inline void cell_geometry(Mesh &m)
 {
     for(auto &c : m.cells) {
@@ -58,7 +58,7 @@ inline void cell_geometry(Mesh &m)
         c.cy = cy / (6.0 * A);
     }
 }
-
+// CHECK: BUILD_FACES
 inline void build_faces(Mesh &m)
 {
     std::map<std::pair<int, int>, std::vector<int>> edge_map;

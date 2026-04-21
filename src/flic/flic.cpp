@@ -38,7 +38,7 @@ void apply_boundaries_local(Field3& u, int Nx, int Ny, int fict_x, int fict_y,
                                     left_bc_code, right_bc_code, up_bc_code, down_bc_code,
                                     g);
 }
-
+// CHECK: FLIC_LAGRANGE
 void lagrangian_pressure_x(const Field3& in, Field3& out, double dt, double dx, double g,
                            int Nx, int Ny, int fict_x, int fict_y) {
     out = in;

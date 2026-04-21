@@ -5,7 +5,7 @@ cells = 32342
 seq processes = 1
 par processes = 4
 tend = 0.05
-scheme = godunov, time = rk2, cfl = 0.4
+scheme = HLLC, time = rk2, cfl = 0.4
 partition counts = [8086, 8085, 8086, 8085]
 seq_time = 1.795 s
 par_time = 0.391 s
