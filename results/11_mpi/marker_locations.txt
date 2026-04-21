@@ -1,2 +1,0 @@
-src/mpi_parallel.hpp:110:// CHECK: DECOMPOSITION
-src/mpi_parallel.hpp:225:// CHECK: HALO_EXCHANGE
