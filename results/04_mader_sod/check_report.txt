@@ -1,0 +1,7 @@
+Sod checklist report
+[PASS] grid: Nx=100, Ny=3
+[PASS] gamma: gamma=1.4
+[PASS] viscosity: mader_visc=0.5
+[PASS] cfl: cfl=0.5
+[PASS] wave positions: contact_x=0.7000, shock_x=0.8400
+

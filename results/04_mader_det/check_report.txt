@@ -1,0 +1,11 @@
+CJ checklist report
+[PASS] grid: Nx=200, Ny=3
+[PASS] gamma: gamma=3.0
+[PASS] viscosity: mader_visc=0.5
+[PASS] cfl: cfl=0.5
+[FAIL] arrhenius rate: reaction_rate=500000000.0
+[PASS] min temperature: min_temperature=1000.0
+[PASS] gasw threshold: gasw_threshold=0.02
+[PASS] front speed: D=0.8919
+[PASS] front linearity: r2=0.9976
+

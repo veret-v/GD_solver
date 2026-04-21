@@ -1,0 +1,6 @@
+CJ detonation check values
+Config: Nx=200, Ny=3, gamma=3.0, reaction_rate=500000000.0, activation=1.0, min_temperature=1000.0, gasw_threshold=0.02
+D_computed=0.891943 cm/us (target 0.880000)
+P_max=0.535825 Mbar (target P_CJ 0.356224)
+front_final=0.333750 cm, r2=0.997606, zone_width=1
+behind_plateau_mean=0.186105 Mbar, behind_plateau_std=0.039483 Mbar
