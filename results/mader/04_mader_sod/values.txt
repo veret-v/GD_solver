@@ -1,0 +1,5 @@
+Sod check values from the central row
+Config: Nx=100, Ny=3, gamma=1.4, visc=0.5, cfl=0.5
+x≈0.60 -> x=0.595, rho=0.3851, p=0.3111, u=0.9889
+x≈0.75 -> x=0.745, rho=0.3184, p=0.3117, u=1.0044
+contact_x=0.7000, shock_x=0.8400, dx=0.0100, contact_width=12, shock_width=6

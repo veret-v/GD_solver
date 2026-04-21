@@ -1,0 +1,7 @@
+Corner turning check values
+Config: x_max=7.0, y_max=4.0, Nx=140, Ny=80, step_x_end=2.0, step_y_end=3.0, shargatov_correction=0
+channel_speed=0.870268 cm/us (target 0.880000), r2=0.993740
+curvature=2.450000 cm
+rho_min=1.156180, p_min=3.680000e-08
+dead_zone_contrast: p_top=0.076830, p_bottom=0.000000, w_top=0.834103, w_bottom=1.000000
+selected_times: before=2.114127, exit=2.400348, after=3.420742

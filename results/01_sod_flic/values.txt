@@ -1,0 +1,21 @@
+Sod shock tube, FLIC
+Nx = 200, CFL = 0.9, gamma = 1.4, t_final = 0.2
+Boundary conditions: reflective/mirror on all sides
+Typical dt ~= 0.00195; first dt = 0.00378427; mean dt = 0.00198020 over 101 steps; final clipped dt = 0.000769396
+
+Control points, linear interpolation from final_results.csv:
+x=0.60: exact rho=0.4263 p=0.3031 u=0.9275
+x=0.60: FLIC  rho=0.4231 p=0.3032 u=0.9272
+x=0.60: abs_error rho=3.1745e-03 p=2.2500e-05 u=2.8650e-04
+x=0.75: exact rho=0.2656 p=0.3031 u=0.9275
+x=0.75: FLIC  rho=0.2675 p=0.3031 u=0.9273
+x=0.75: abs_error rho=1.9705e-03 p=7.0000e-05 u=1.9800e-04
+
+Expected reference values from the assignment:
+x=0.60: rho=0.4263 p=0.3031 u=0.9274
+x=0.75: rho=0.2656 p=0.3031 u=0.9274
+
+Wave markers used in plots:
+VR fan: head x=0.2634, tail x=0.4859, plotted marker x=0.3747
+KR contact discontinuity x=0.6855
+UV shock wave x=0.8504

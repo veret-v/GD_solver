@@ -1,0 +1,9 @@
+RCB decomposition counts, mesh=meshes/naca.msh
+cells=32342
+
+K=1: rank 0=32342
+K=2: rank 0=16171, rank 1=16171
+K=3: rank 0=10781, rank 1=10781, rank 2=10780
+K=4: rank 0=8086, rank 1=8085, rank 2=8086, rank 3=8085
+K=5: rank 0=6469, rank 1=6468, rank 2=6468, rank 3=6469, rank 4=6468
+K=6: rank 0=5390, rank 1=5391, rank 2=5390, rank 3=5390, rank 4=5391, rank 5=5390

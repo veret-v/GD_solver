@@ -1,0 +1,16 @@
+Info    : Reading 'meshes/naca.msh'...
+Info    : 131 entities
+Info    : 16415 nodes
+Info    : 32830 elements
+Info    : Done reading 'meshes/naca.msh'
+Info    : Clearing all models and views...
+Info    : Done clearing all models and views
+RCB Partitioning completed.
+step=318 t=0.05 Cd=-0.778513 Cl=-2.11118
+Finished. Results written to results/11_mpi/verification_seq
+
+========================================
+End!
+Time: 1.795 s.
+========================================
+

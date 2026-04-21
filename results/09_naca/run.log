@@ -1,0 +1,37 @@
+Info    : Reading 'meshes/naca.msh'...
+Info    : Reading 'meshes/naca.msh'...
+Info    : Reading 'meshes/naca.msh'...
+Info    : Reading 'meshes/naca.msh'...
+Info    : 131 entities
+Info    : 131 entities
+Info    : 131 entities
+Info    : 131 entities
+Info    : 16415 nodes
+Info    : 16415 nodes
+Info    : 16415 nodes
+Info    : 16415 nodes
+Info    : 32830 elements
+Info    : 32830 elements
+Info    : 32830 elements
+Info    : 32830 elements
+Info    : Done reading 'meshes/naca.msh'
+Info    : Done reading 'meshes/naca.msh'
+Info    : Done reading 'meshes/naca.msh'
+Info    : Done reading 'meshes/naca.msh'
+Info    : Clearing all models and views...
+Info    : Clearing all models and views...
+Info    : Clearing all models and views...
+Info    : Clearing all models and views...
+Info    : Done clearing all models and views
+Info    : Done clearing all models and views
+Info    : Done clearing all models and views
+Info    : Done clearing all models and views
+RCB Partitioning completed.
+step=24741 t=2 Cd=-0.0898205 Cl=0.226761
+Finished. Results written to /Users/sergei/CLionProjects/GD/results/09_naca/run
+
+========================================
+End!
+Time: 47.196 s.
+========================================
+

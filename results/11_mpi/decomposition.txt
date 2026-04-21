@@ -1,0 +1,9 @@
+CHECK: DECOMPOSITION
+mesh = meshes/naca.msh
+cells = 32342
+algorithm = RCB
+processes = 4
+rank 0: 8086 cells
+rank 1: 8085 cells
+rank 2: 8086 cells
+rank 3: 8085 cells

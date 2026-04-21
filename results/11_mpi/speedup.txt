@@ -1,0 +1,15 @@
+MPI speedup benchmark
+case = NACA airfoil
+mesh = meshes/naca.msh
+cells = 32342
+tend = 0.2
+scheme = godunov, time = rk2, cfl = 0.4
+time source = solver MPI_Wtime output
+
+N T_seconds Speedup Efficiency
+1 6.765000 1.000000 1.000000
+2 3.032000 2.231201 1.115600
+3 2.259000 2.994688 0.998229
+4 1.706000 3.965416 0.991354
+5 1.561000 4.333760 0.866752
+6 1.607000 4.209708 0.701618

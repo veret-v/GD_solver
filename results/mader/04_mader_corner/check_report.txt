@@ -1,0 +1,9 @@
+Corner checklist report
+[PASS] domain: x_max=7.0, y_max=4.0
+[PASS] grid: Nx=140, Ny=80
+[PASS] channel geometry: step_x_end=2.0, step_y_end=3.0
+[PASS] in-channel speed: D=0.8703, r2=0.9937
+[PASS] curved front after exit: curvature=2.4500
+[PASS] dead zone contrast: p_top=0.0768, p_bottom=0.0000, w_top=0.8341, w_bottom=1.0000
+[PASS] stability: rho_min=1.156180, p_min=3.680000e-08
+[PASS] shargatov implementation present, runtime flag: shargatov_correction=0

@@ -1,0 +1,19 @@
+# Сравнение v(x) при y=0.5 с данными Ghia et al. (Re=100)
+# x       v_calc      v_ghia      error(%)
+x=0.0000 v_calc=-0.0137 v_ghia=0.0000 err=1.37%
+x=0.0625 v_calc=0.0760 v_ghia=0.0760 err=0.06%
+x=0.0703 v_calc=0.0848 v_ghia=0.0848 err=0.04%
+x=0.0781 v_calc=0.0936 v_ghia=0.0936 err=0.02%
+x=0.0938 v_calc=0.1089 v_ghia=0.1089 err=0.01%
+x=0.1563 v_calc=0.1503 v_ghia=0.1503 err=0.02%
+x=0.2266 v_calc=0.1676 v_ghia=0.1751 err=4.29%
+x=0.2344 v_calc=0.1679 v_ghia=0.1753 err=4.23%
+x=0.5000 v_calc=0.0633 v_ghia=0.0630 err=0.50%
+x=0.8047 v_calc=-0.2481 v_ghia=-0.2453 err=1.13%
+x=0.8594 v_calc=-0.2344 v_ghia=-0.2245 err=4.44%
+x=0.9063 v_calc=-0.1757 v_ghia=-0.1691 err=3.88%
+x=0.9453 v_calc=-0.0985 v_ghia=-0.1031 err=4.50%
+x=0.9531 v_calc=-0.0808 v_ghia=-0.0886 err=8.90%
+x=0.9609 v_calc=-0.0630 v_ghia=-0.0630 err=0.03%
+x=0.9688 v_calc=-0.0458 v_ghia=-0.0458 err=0.11%
+x=1.0000 v_calc=0.0204 v_ghia=0.0000 err=2.04%

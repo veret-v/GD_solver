@@ -1,0 +1,37 @@
+Info    : Reading '/Users/sergei/CLionProjects/GD/results/08_woodward/woodward_step.msh'...
+Info    : Reading '/Users/sergei/CLionProjects/GD/results/08_woodward/woodward_step.msh'...
+Info    : Reading '/Users/sergei/CLionProjects/GD/results/08_woodward/woodward_step.msh'...
+Info    : Reading '/Users/sergei/CLionProjects/GD/results/08_woodward/woodward_step.msh'...
+Info    : 13 entities
+Info    : 13 entities
+Info    : 13 entities
+Info    : 13 entities
+Info    : 6723 nodes
+Info    : 6723 nodes
+Info    : 6723 nodes
+Info    : 6723 nodes
+Info    : 13444 elements
+Info    : 13444 elements
+Info    : 13444 elements
+Info    : 13444 elements
+Info    : Done reading '/Users/sergei/CLionProjects/GD/results/08_woodward/woodward_step.msh'
+Info    : Done reading '/Users/sergei/CLionProjects/GD/results/08_woodward/woodward_step.msh'
+Info    : Done reading '/Users/sergei/CLionProjects/GD/results/08_woodward/woodward_step.msh'
+Info    : Done reading '/Users/sergei/CLionProjects/GD/results/08_woodward/woodward_step.msh'
+Info    : Clearing all models and views...
+Info    : Clearing all models and views...
+Info    : Done clearing all models and views
+Info    : Done clearing all models and views
+Info    : Clearing all models and views...
+Info    : Clearing all models and views...
+Info    : Done clearing all models and views
+Info    : Done clearing all models and views
+RCB Partitioning completed.
+step=3371 t=0.55 Cd=0.00258657 Cl=-0.174307
+Finished. Results written to /Users/sergei/CLionProjects/GD/results/08_woodward/run
+
+========================================
+End!
+Time: 1.700 s.
+========================================
+
